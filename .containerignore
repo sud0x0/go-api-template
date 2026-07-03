@@ -1,0 +1,49 @@
+# Version control
+.git
+.gitignore
+.gitleaks.toml
+
+# Build output
+bin/
+_BUILD_/
+tmp/
+
+# Go test and coverage artifacts
+*.test
+*.out
+*.coverprofile
+
+# Development and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+._*
+
+# Pre-commit config
+.pre-commit-config.yaml
+
+# Documentation
+*.md
+LICENSE
+
+# Python
+.venv/
+
+# Dependency directories
+vendor/
+
+# Claude Code
+.claude/
+CLAUDE.md
+.claudeignore
+
+# Test results
+_test_results_/

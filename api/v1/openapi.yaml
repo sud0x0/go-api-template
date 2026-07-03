@@ -1,0 +1,616 @@
+openapi: 3.0.3
+info:
+  title: Go Template API
+  description: |
+    Template API. Replace this description with your project details.
+
+    ## Authentication
+
+    Authentication is enforced at the middleware layer but **not yet implemented** in this template.
+    Protected endpoints require a valid JWT access token in the `Authorization` header using the Bearer scheme.
+
+    When implementing authentication, validate these claims:
+    - `iss` — must match your expected issuer
+    - `aud` — must match your API identifier
+    - `exp` — must not be expired
+    - `nbf` — must not be used before this time
+    - `alg` — server-side whitelist only (enforce RS256)
+    - `kid` — must match a key in your JWKS
+
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:8080
+    description: Development server
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Health
+    description: Liveness and readiness probes
+  - name: Metrics
+    description: Prometheus metrics endpoint
+  - name: Log
+    description: Log entry management
+
+paths:
+  /livez:
+    get:
+      tags:
+        - Health
+      summary: Liveness probe
+      description: |
+        Returns 200 if the process is running. Does NOT check downstream
+        dependencies — use this for Kubernetes livenessProbe to avoid pod
+        kills during transient dependency outages.
+      operationId: livez
+      security: []
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: alive
+
+  /readyz:
+    get:
+      tags:
+        - Health
+      summary: Readiness probe
+      description: |
+        Returns 200 if the application is ready to serve traffic (database
+        reachable). Returns 503 if a dependency is unhealthy. Use this for
+        Kubernetes readinessProbe and load balancer health checks.
+
+        The result is cached for ~2s, so a flood of probes collapses to at most
+        one database ping per window. On the public listener this endpoint is
+        gated by `PUBLIC_READINESS` (default true); when false it is served on
+        the internal admin port only and the public listener returns 404.
+      operationId: readyz
+      security: []
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+        "503":
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unhealthy
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check (alias for /readyz)
+      description: |
+        Retained as an alias for /readyz for backwards compatibility with
+        deployments that already point health checks at /health. New
+        deployments should use /livez or /readyz directly.
+      operationId: healthCheck
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+        "503":
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: unhealthy
+
+  /metrics:
+    get:
+      tags:
+        - Metrics
+      summary: Prometheus metrics
+      description: |
+        Exposes application metrics in Prometheus text format for scraping.
+
+        **WARNING:** This endpoint has no authentication. In production, restrict access
+        via network policy, reverse proxy, or move to a separate internal port.
+        Exposed metrics can reveal system internals.
+
+        **Available metrics:**
+        - `http_requests_total` — Total HTTP requests by method, path, and status code
+        - `http_request_duration_seconds` — Request duration histogram
+        - `http_requests_in_flight` — Current number of requests being processed
+        - `http_response_size_bytes` — Response size histogram
+      operationId: getMetrics
+      security: []
+      responses:
+        "200":
+          description: Prometheus metrics in text format
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP http_requests_total Total number of HTTP requests by method, path, and status code.
+                  # TYPE http_requests_total counter
+                  http_requests_total{method="GET",path="/health",status="200"} 42
+
+  /api/v1/logs:
+    get:
+      tags:
+        - Log
+      summary: List log entries
+      description: Returns log entries for the authenticated user, optionally filtered by date range.
+      operationId: listLogs
+      parameters:
+        - name: start_date
+          in: query
+          description: Filter logs from this datetime (RFC3339)
+          schema:
+            type: string
+            format: date-time
+            example: "2025-01-01T00:00:00Z"
+        - name: end_date
+          in: query
+          description: Filter logs up to this datetime (RFC3339)
+          schema:
+            type: string
+            format: date-time
+            example: "2025-12-31T23:59:59Z"
+        - name: limit
+          in: query
+          description: Maximum number of results (default 100, max 100)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 100
+        - name: offset
+          in: query
+          description: |
+            OFFSET-mode pagination: number of results to skip. Capped at 10000 —
+            a HARD reachability limit (deeper rows are only reachable via
+            `cursor`). Mutually exclusive with `cursor` (supplying both → 400).
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 10000
+            default: 0
+        - name: cursor
+          in: query
+          description: |
+            Keyset (cursor) pagination, recommended for deep or
+            concurrently-mutated lists. PRESENCE of this parameter selects cursor
+            mode; the first page is requested with an empty value (`?cursor=`).
+            Each response then carries `next_cursor` to fetch the following page
+            (omitted on the last page). The value is OPAQUE — echo it back
+            verbatim. Mutually exclusive with `offset` (supplying both → 400).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: |
+            A page of log entries. The SHAPE depends on pagination mode:
+            offset-mode requests return a BARE array `[Log, …]` (unchanged for
+            backwards compatibility); cursor-mode requests (any request carrying
+            the `cursor` parameter) return the `LogCursorPage` object
+            `{"logs":[…],"next_cursor":"…"}`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/Log"
+                  - $ref: "#/components/schemas/LogCursorPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      tags:
+        - Log
+      summary: Create a log entry
+      operationId: createLog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogCreateRequest"
+      responses:
+        "201":
+          description: Log entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Log"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/logs/batch:
+    post:
+      tags:
+        - Log
+      summary: Create multiple log entries atomically
+      description: |
+        Creates every entry in a single transaction — all-or-nothing. If any
+        entry fails (validation or database), NONE are created. On success
+        returns 201 with the created entries in request order.
+
+        At most 100 entries per request (see `maxItems`); an over-size batch
+        returns 400 with the `LimitExceededError` body (`limit`/`current`). An
+        empty list is a 400 validation error.
+      operationId: batchCreateLogs
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogBatchCreateRequest"
+      responses:
+        "201":
+          description: All log entries created (in request order)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Log"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/logs/{id}:
+    get:
+      tags:
+        - Log
+      summary: Get a log entry by ID
+      operationId: getLog
+      parameters:
+        - $ref: "#/components/parameters/LogID"
+      responses:
+        "200":
+          description: Log entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Log"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    put:
+      tags:
+        - Log
+      summary: Update a log entry
+      description: |
+        Updates the log content for an existing entry. The `date_and_time`
+        timestamp is fixed at creation and cannot be modified — only the
+        `log` field is mutable.
+      operationId: updateLog
+      parameters:
+        - $ref: "#/components/parameters/LogID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogUpdateRequest"
+      responses:
+        "200":
+          description: Updated log entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Log"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/RequestEntityTooLarge"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    delete:
+      tags:
+        - Log
+      summary: Delete a log entry
+      operationId: deleteLog
+      parameters:
+        - $ref: "#/components/parameters/LogID"
+      responses:
+        "204":
+          description: Log entry deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+# NOTE: Authentication is enforced at the middleware layer but not yet implemented
+# in this template. Implement auth middleware that validates JWTs and sets user_id
+# in the request context. See README.md for the auth contract.
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token. Authentication middleware is not implemented in this template —
+        implement your own middleware that validates tokens and sets user_id in context.
+        Recommended: RS256-signed tokens with validated `iss`, `aud`, `exp`, `nbf` claims.
+
+  parameters:
+    LogID:
+      name: id
+      in: path
+      required: true
+      description: |
+        UUID of the log entry. Accepted in any form `uuid.Parse` understands
+        (including the `urn:uuid:` prefix and `{...}` braces); the server
+        canonicalises it before use. A malformed id returns 400, never 500.
+      schema:
+        type: string
+        format: uuid
+        example: "660e8400-e29b-41d4-a716-446655440001"
+
+  schemas:
+    Log:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "660e8400-e29b-41d4-a716-446655440001"
+        user_id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        date_and_time:
+          type: string
+          format: date-time
+          example: "2025-12-28T10:30:00Z"
+        log:
+          type: string
+          example: "Today I worked on the template project."
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    LogCursorPage:
+      type: object
+      description: |
+        Cursor-mode list response. Returned ONLY when the request carries the
+        `cursor` parameter; offset-mode requests return a bare array instead.
+      required:
+        - logs
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Log"
+        next_cursor:
+          type: string
+          description: |
+            Opaque cursor for the next page. OMITTED on the last page (no more
+            rows). Echo it back verbatim as the `cursor` query parameter.
+          example: "MjAyNS0wMS0xNVQxMTowMDowMFp8NjYwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAy"
+
+    LogCreateRequest:
+      type: object
+      required:
+        - date_and_time
+        - log
+      properties:
+        date_and_time:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp for this log entry
+          example: "2025-12-28T10:30:00Z"
+        log:
+          type: string
+          description: Log content (max 10000 characters)
+          maxLength: 10000
+          example: "Today I worked on the template project."
+
+    LogUpdateRequest:
+      type: object
+      required:
+        - log
+      properties:
+        log:
+          type: string
+          description: Updated log content (max 10000 characters)
+          maxLength: 10000
+          example: "Updated content."
+
+    LogBatchCreateRequest:
+      type: object
+      required:
+        - logs
+      properties:
+        logs:
+          type: array
+          description: |
+            Log entries to create atomically. 1–100 entries; an empty list is a
+            400 and an over-size list returns LimitExceededError. The maxItems
+            value is the contract for the server's MaxBatchSize constant.
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/LogCreateRequest"
+
+    ErrorResponse:
+      type: object
+      description: |
+        The error envelope returned by API endpoints and the public router's
+        404/405 fallbacks. `error` is a bounded, machine-readable error type
+        (always one of a fixed set of constants — never free-form text from a
+        lower layer); `message` is a human-readable description. A few
+        middleware-generated responses are body-less by design (chi's Timeout
+        504 and Recoverer panic-500).
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Bounded, machine-readable error type.
+          example: "invalid_input"
+        message:
+          type: string
+          description: Human-readable description.
+          example: "invalid input"
+
+    LimitExceededError:
+      description: |
+        A superset of ErrorResponse returned when a bounded value (e.g. log
+        length) is exceeded. Adds `limit` and `current` so the client knows by
+        how much. `error` is always `limit_exceeded`.
+      allOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - type: object
+          properties:
+            error:
+              type: string
+              example: "limit_exceeded"
+            message:
+              type: string
+              example: "log exceeds maximum of 10000 characters"
+            limit:
+              type: integer
+              example: 10000
+            current:
+              type: integer
+              example: 10001
+
+  responses:
+    BadRequest:
+      description: |
+        Bad request — malformed input, failed validation, invalid pagination,
+        invalid date/time, or an unknown/duplicate JSON field. The body is an
+        ErrorResponse; for a length-limit violation it is a LimitExceededError
+        (which extends ErrorResponse with `limit` and `current`). An invalid
+        date/time names the offending field in the `message` (`start_date`,
+        `end_date`, or `date_and_time`), prefixed with `entry N:` for the
+        failing entry of a batch create — e.g. `start_date: invalid
+        date_and_time: use RFC3339 ...`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ErrorResponse"
+              - $ref: "#/components/schemas/LimitExceededError"
+    Unauthorized:
+      description: |
+        Unauthorized — authentication is required or the user ID is absent from
+        the request context. Carries a `WWW-Authenticate: Bearer` header.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: |
+        Resource not found. Also returned by the public router for any unmatched
+        path (`error: "not_found"`). A wrong HTTP method on a known path returns
+        405 with `error: "method_not_allowed"` — both carry the ErrorResponse
+        envelope. (Note: a few middleware-generated responses are body-less by
+        design — chi's `Timeout` 504 and `Recoverer` panic-500.)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    RequestEntityTooLarge:
+      description: |
+        The request body exceeds the server's size cap (1 MiB). Per RFC 9110
+        §15.5.14 this is 413, distinct from a 400 for a malformed body.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    TooManyRequests:
+      description: |
+        Rate limit exceeded. The app-level limiter (opt-in via `RATE_LIMIT_RPM`,
+        keyed by client IP) returns this `ErrorResponse` with `error:
+        "rate_limited"`. In edge-limited deployments the 429 — and its body —
+        may instead come from the upstream load balancer / gateway / WAF, which
+        is the primary rate-limit control; that body is not guaranteed to match
+        this schema.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalServerError:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

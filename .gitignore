@@ -1,0 +1,92 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.coverprofile
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+.venv/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+.env.*
+!.env.example
+
+# build location
+_BUILD_/
+**/_BUILD_/
+_tmp_/
+
+# Air live reload
+tmp/
+
+# golangci-lint cache
+.golangci-lint-cache/
+
+# Test results
+_test_results_/
+
+# GoReleaser snapshot/release output — cross-compiled binaries, SBOMs,
+# checksums, provenance. Hundreds of MB. NEVER commit.
+dist/
+
+# Additional coverage / profiling formats not caught by *.out / *.coverprofile
+coverage.html
+coverage.txt
+*.prof
+trace.out
+
+# Local log redirects (`make logs > debug.log` etc.)
+*.log
+
+# TLS / certs / keys — defensive. The repo does not need any of these
+# committed; cost of accidentally including one is enormous.
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.gpg
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# direnv — same risk profile as .env (already ignored)
+.envrc
+
+# Postgres data + ad-hoc database dumps
+pgdata/
+*.sql.dump
+*.sql.gz

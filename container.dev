@@ -1,0 +1,21 @@
+# ============================================================================
+# THIS IS FOR LOCAL DEVELOPMENT ONLY
+# ============================================================================
+
+FROM golang:1.26-alpine
+
+# Pin tool versions for reproducible local development.
+# goose CLI is intentionally NOT installed — migrations are run via the
+# embedded migrator at cmd/migrate (see `make db-migrate`).
+RUN go install github.com/air-verse/air@v1.65.3
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+EXPOSE 8080
+
+CMD ["air", "-c", ".air.toml"]

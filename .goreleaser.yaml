@@ -1,0 +1,150 @@
+# GoReleaser v2 configuration for go-api-template.
+#
+# This config releases TWO static binaries — the API server and the database
+# migrator — built with identical version metadata. They are intentionally
+# shipped together so a deploy never carries an API binary expecting a newer
+# schema than the migrator just applied.
+#
+# Release notes are NOT generated from commit messages. The release workflow
+# extracts the relevant section from CHANGELOG.md and passes it via
+# --release-notes; that flag makes GoReleaser skip its own changelog
+# generation. The top-level changelog block is omitted on purpose — per
+# GoReleaser docs, the equivalent "disable" toggle would ALSO drop
+# --release-notes and leave an empty release body. Omit, never toggle.
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: api
+    main: ./cmd/api
+    binary: go-api
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    # ldflags MUST match the Makefile's LDFLAGS variable. The -X paths point
+    # at the SAME symbols build-binary injects locally so `--version` output
+    # is identical regardless of which build path produced the binary.
+    ldflags:
+      - -s -w
+      - -X github.com/sud0x0/go-api-template/internal/version.Version={{ .Version }}
+      - -X github.com/sud0x0/go-api-template/internal/version.GitCommit={{ .ShortCommit }}
+      - -X github.com/sud0x0/go-api-template/internal/version.BuildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+  - id: migrator
+    main: ./cmd/migrate
+    binary: go-api-migrator
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/sud0x0/go-api-template/internal/version.Version={{ .Version }}
+      - -X github.com/sud0x0/go-api-template/internal/version.GitCommit={{ .ShortCommit }}
+      - -X github.com/sud0x0/go-api-template/internal/version.BuildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+# Release bare binaries (no tar/zip wrapping). Each artifact is the binary
+# itself, renamed to embed the version and platform.
+archives:
+  - id: api-archive
+    ids:
+      - api
+    formats:
+      - binary
+    name_template: "go-api-{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+  - id: migrator-archive
+    ids:
+      - migrator
+    formats:
+      - binary
+    name_template: "go-api-migrator-{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# One SBOM (SPDX-JSON via syft) per binary artifact.
+sboms:
+  - artifacts: binary
+    documents:
+      - "{{ .ArtifactName }}.sbom.json"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+release:
+  # Owner/name are auto-detected from the git remote at release time;
+  # leaving them unset keeps this template portable.
+  draft: false
+  prerelease: auto
+  header: |
+    Static binaries (CGO disabled, `-trimpath`, `-s -w`) for:
+
+    | OS      | Architectures      |
+    |---------|--------------------|
+    | linux   | amd64, arm64       |
+    | darwin  | amd64, arm64       |
+    | windows | amd64              |
+
+    Each release contains two binaries:
+
+    - `go-api` — the API server
+    - `go-api-migrator` — the embedded database migrator
+
+    Run the migrator first, then the API. They read the same `DB_*`
+    environment variables.
+  footer: |
+    ## Verifying downloads
+
+    Verify checksums:
+
+    ```bash
+    sha256sum -c checksums.txt
+    ```
+
+    Verify SLSA provenance with [slsa-verifier](https://github.com/slsa-framework/slsa-verifier):
+
+    ```bash
+    slsa-verifier verify-artifact <binary> \
+      --provenance-path multiple.intoto.jsonl \
+      --source-uri github.com/{{ .Env.GITHUB_REPOSITORY }} \
+      --source-tag {{ .Tag }}
+    ```
+
+    ## Running
+
+    ```bash
+    # 1. Apply migrations BEFORE deploying the new API.
+    DB_HOST=... DB_PORT=5432 DB_USER=... DB_PASSWORD=... DB_NAME=... \
+      ./go-api-migrator up
+
+    # 2. Start the API.
+    DB_HOST=... DB_PORT=5432 DB_USER=... DB_PASSWORD=... DB_NAME=... \
+      ./go-api
+    ```

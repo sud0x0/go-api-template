@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  # Pre-commit runs locally but is skippable via `git commit --no-verify`.
+  # This job makes every configured hook mandatory on the server side.
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Always grab the latest patch for the version line in go.mod.
+          # Without this, setup-go installs the exact patch declared, and
+          # any stdlib CVE fixed in a later patch blocks govulncheck.
+          check-latest: true
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Pin install.sh to the SAME version tag we're installing — fetching
+      # install.sh from master means the bundled checksum table drifts as
+      # upstream rolls forward, which broke this job once already
+      # (master's table no longer matched the v2.12.2 release binary).
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/v2.12.2/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Install semgrep + pre-commit
+        run: pip install semgrep==1.165.0 pre-commit==4.6.0
+
+      - name: Cache pre-commit environment
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Run pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Always grab the latest patch for the version line in go.mod.
+          # Without this, setup-go installs the exact patch declared, and
+          # any stdlib CVE fixed in a later patch blocks govulncheck.
+          check-latest: true
+          cache: true
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  test-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: appdb
+          POSTGRES_USER: appuser
+          POSTGRES_PASSWORD: changeme
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U appuser -d appdb"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_HOST: localhost
+      DB_PORT: '5432'
+      DB_USER: appuser
+      DB_PASSWORD: changeme
+      DB_NAME: appdb
+      DB_SSLMODE: disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Always grab the latest patch for the version line in go.mod.
+          # Without this, setup-go installs the exact patch declared, and
+          # any stdlib CVE fixed in a later patch blocks govulncheck.
+          check-latest: true
+          cache: true
+
+      # Run migrations via the embedded migrator we ship with the API.
+      - name: Apply migrations
+        run: go run ./cmd/migrate up
+
+      # -p 1: integration tests share the same Postgres service container;
+      # the migrator tests reset the schema, so packages must run serially.
+      - name: Run integration tests
+        run: go test -race -p 1 -tags integration ./...
+
+  # Catches release-pipeline regressions on PR rather than at tag time.
+  goreleaser-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # Always grab the latest patch for the version line in go.mod.
+          # Without this, setup-go installs the exact patch declared, and
+          # any stdlib CVE fixed in a later patch blocks govulncheck.
+          check-latest: true
+          cache: true
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: check
+
+      # Run the extract-changelog Go tests to verify the script and its
+      # fixture stay in sync. If the script's exit codes ever change, this
+      # fails on PR before tag time.
+      - name: extract-changelog tests
+        run: go test ./scripts/...

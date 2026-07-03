@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Default to read-only at workflow scope; widen per job.
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # publish the release + uploads
+      id-token: write     # required by the SLSA provenance generator
+    outputs:
+      hashes: ${{ steps.subjects.outputs.hashes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # GoReleaser needs the full history for snapshot/version logic
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install syft (SBOM generator)
+        uses: anchore/sbom-action/download-syft@v0
+
+      # The CHANGELOG must already contain a section for the tag's version.
+      # extract-changelog.sh fails if the section is missing or empty, which
+      # fails the workflow BEFORE GoReleaser runs — no release is created.
+      # This enforces the human-authored-changelog rule.
+      #
+      # GITHUB_REF_NAME is provided by Actions and reflects the pushed tag
+      # (e.g. "v1.2.3"), not any user-controlled input — safe to use in run:.
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ./scripts/extract-changelog.sh "$VERSION" > /tmp/release-notes.md
+          echo "----- Release notes for ${VERSION} -----"
+          cat /tmp/release-notes.md
+          echo "-----------------------------------------"
+
+      # GoReleaser builds binaries, generates SBOMs, produces checksums,
+      # creates the GitHub release. --release-notes makes it use our
+      # extracted CHANGELOG body verbatim (between the configured header
+      # and footer) instead of trying to generate notes from commits.
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean --release-notes /tmp/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Compute the SLSA "subjects" the next job needs: a base64-encoded
+      # newline-delimited list of "<sha256>  <filename>" rows, drawn from
+      # GoReleaser's artifacts.json. Filter to type == Binary and include
+      # only entries with a recorded checksum.
+      - name: Compute SLSA subjects from dist/artifacts.json
+        id: subjects
+        run: |
+          set -euo pipefail
+          hashes=$(
+            jq -r '
+              .[]
+              | select(.type == "Binary" and .extra.Checksum != null)
+              | "\(.extra.Checksum | split(":")[1])  \(.name)"
+            ' dist/artifacts.json | base64 -w0
+          )
+          if [ -z "$hashes" ]; then
+            echo "::error::no Binary artifacts with checksums in dist/artifacts.json"
+            exit 1
+          fi
+          echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
+
+  # Generate SLSA Level 3 provenance for every binary. The reusable
+  # workflow uploads multiple.intoto.jsonl as a release asset.
+  binary-provenance:
+    needs: [goreleaser]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
+    with:
+      base64-subjects: ${{ needs.goreleaser.outputs.hashes }}
+      upload-assets: true

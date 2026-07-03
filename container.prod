@@ -1,0 +1,87 @@
+# ============================================================================
+# PRODUCTION MULTI-STAGE BUILD
+# ============================================================================
+# Stage 1: build a statically linked binary with version metadata
+# Stage 2: copy binary into a minimal distroless image
+#
+# The final image contains only the binary and CA certificates.
+# No shell, no package manager, no Go toolchain — minimal attack surface.
+#
+# NOTE: For production releases, prefer the GoReleaser pipeline (see
+# .goreleaser.yaml and .github/workflows/release.yml) — it produces signed,
+# checksummed, SBOM-bearing, SLSA-L3-attested static binaries. This
+# Dockerfile is retained for environments that ship container images
+# rather than raw binaries.
+#
+# Build (manually):
+#   podman build -f container.prod \
+#     --build-arg VERSION=$(git describe --tags --always --dirty) \
+#     --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) \
+#     --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+#     -t app:latest .
+#
+# Run:
+#   podman run --env-file .env -p 8080:8080 app:latest
+
+# ============================================================================
+# Stage 1 — build
+# ============================================================================
+FROM golang:1.26-alpine AS builder
+
+# Version metadata is injected at build time. Without --build-arg, these
+# fall back to "dev"/"unknown" so --version still works on local builds.
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+WORKDIR /build
+
+# Download dependencies first — cached unless go.mod/go.sum change
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO_ENABLED=0 produces a statically linked binary with no libc dependency.
+# -ldflags="-s -w" strips debug info and symbol table for smaller binaries.
+# -ldflags -X injects version metadata into internal/version (same -X paths
+# the GoReleaser pipeline uses). -trimpath removes local file paths.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-s -w \
+        -X github.com/sud0x0/go-api-template/internal/version.Version=${VERSION} \
+        -X github.com/sud0x0/go-api-template/internal/version.GitCommit=${GIT_COMMIT} \
+        -X github.com/sud0x0/go-api-template/internal/version.BuildDate=${BUILD_DATE}" \
+    -trimpath \
+    -o /build/app \
+    ./cmd/api
+
+# ============================================================================
+# Stage 2 — runtime
+# ============================================================================
+# gcr.io/distroless/static-debian12 contains only:
+#   - CA certificates (for TLS outbound connections)
+#   - /etc/passwd (for running as a non-root user)
+#   - timezone data
+# It has no shell, which means no shell injection surface.
+FROM gcr.io/distroless/static-debian12
+
+# Run as non-root user (uid 65532 = "nonroot" in distroless)
+USER nonroot:nonroot
+
+COPY --from=builder /build/app /app
+
+EXPOSE 8080 9090
+
+# HEALTHCHECK uses the binary's own --healthcheck mode to probe /livez over
+# localhost. Distroless has no shell and no curl, so we can't use the
+# canonical curl-based pattern. The binary returns exit 0 if /livez responds
+# 200, else 1.
+#
+# No --port is needed: --healthcheck defaults the probe port to $PORT (falling
+# back to 8080), so it automatically tracks the listener. Override PORT at
+# runtime and the probe follows — only the EXPOSE line below may need updating
+# to match. Pass --port explicitly only if you want to probe a different port.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+    CMD ["/app", "--healthcheck"]
+
+ENTRYPOINT ["/app"]

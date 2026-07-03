@@ -1,0 +1,49 @@
+version: "2"
+
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  enable:
+    # Correctness
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+
+    # Security
+    - gosec
+
+    # Code quality
+    - misspell
+    - unconvert
+    - unparam
+    - unused
+
+    # Style
+    - revive
+    - godot
+
+  settings:
+    gosec:
+      excludes:
+        - G404 # Weak random — acceptable for non-security use
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+    godot:
+      scope: declarations
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

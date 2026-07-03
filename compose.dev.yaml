@@ -1,0 +1,62 @@
+# ============================================================================
+# THIS IS FOR LOCAL DEVELOPMENT ONLY
+# ============================================================================
+# Requires .env file with secrets - see .env.example
+#
+# Database credentials come from a single source: DB_USER / DB_PASSWORD /
+# DB_NAME in .env. The Postgres container reads the same variables, so there
+# is no separate POSTGRES_* set to keep in sync.
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: app_db
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      TZ: ${TZ:-Australia/Melbourne}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:Z
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: container.dev
+    container_name: app_api
+    volumes:
+      - .:/app:Z
+      - go_modules:/go/pkg/mod:Z
+    ports:
+      # Both sides track $PORT / $METRICS_PORT so a non-default port in .env
+      # binds the same port inside the container as it is published on. The
+      # container HEALTHCHECK already tracks $PORT via config.ResolvePort.
+      - "${PORT:-8080}:${PORT:-8080}"
+      - "${METRICS_PORT:-9090}:${METRICS_PORT:-9090}"
+    # Wholesale pass-through of .env so EVERY documented variable reaches the
+    # container — no enumerated list to drift out of sync with .env.example
+    # (previously TRUST_PROXY_HEADERS, RATE_LIMIT_RPM, PUBLIC_READINESS, the
+    # SERVER_*_TIMEOUT_SECS and the DB pool/lifetime vars were silently dropped).
+    # This also forwards the MIGRATOR_* vars, so `make db-migrate` (an exec
+    # inside this container) now honours MIGRATOR_LOCK_TIMEOUT /
+    # MIGRATOR_STATEMENT_TIMEOUT from .env — a correctness gain, not a
+    # regression. `environment` entries override `env_file`, so the TZ default
+    # below still applies when TZ is unset.
+    env_file:
+      - .env
+    environment:
+      TZ: ${TZ:-Australia/Melbourne}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  go_modules:

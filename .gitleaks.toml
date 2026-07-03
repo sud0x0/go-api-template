@@ -1,0 +1,33 @@
+title = "gitleaks config"
+
+# Extend the default ruleset built into the binary
+# Latest default rules: https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+[extend]
+useDefault = true
+
+# Global allowlist - paths and patterns to skip
+#
+# RULE: machine-writable directories are NEVER directory-allowlisted. The
+# .claude/ tree (settings.json, skills) receives machine-written content — the
+# harness has previously auto-appended session content into settings.json — so
+# it is the directory that needs scanning most, not least. Never add a
+# '''\.claude/''' entry here; allowlist a PRECISE pattern/file with a reason
+# instead, or rewrite the example content so the scanner does not flag it.
+[allowlist]
+description = "Global allowlist"
+paths = [
+    '''go\.(mod|sum)$''',
+    '''\.gitleaks\.toml$''',
+    '''(?i)\.(jpg|jpeg|png|gif|svg|ico|bmp|tiff)$''',
+    '''(?i)\.(pdf|docx?|xlsx?)$''',
+    '''vendor/''',
+    '''_BUILD_/''',
+    '''_test_results_/''',
+]
+
+# Add project-specific false positives below as needed
+# Example:
+# [[rules]]
+# id = "my-rule"
+# description = "Custom rule"
+# regex = '''YOUR_REGEX'''
