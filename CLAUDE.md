@@ -58,7 +58,7 @@ Commits **should** follow [Conventional Commits v1.0.0](https://www.conventional
 
 Breaking changes use `!` after the type/scope **and** a `BREAKING CHANGE:` footer (e.g. the module rename would have been `refactor!:`). This is **requested, not enforced** — no hook or CI gate rejects other formats, and agents must not add one.
 
-**Attribution:** commits must **not** carry `Co-Authored-By: Claude …` trailers or "Generated with Claude Code" footers — authorship stays with the repository owner. This is enforced for the trailer via `"includeCoAuthoredBy": false` in [.claude/settings.json](.claude/settings.json); the footer is governed by this rule.
+**Attribution:** commits must **not** carry `Co-Authored-By: Claude …` trailers or "Generated with Claude Code" footers — authorship stays with the repository owner. This is enforced for the trailer via `"attribution": { "commit": "", "pr": "" }` in [.claude/settings.json](.claude/settings.json) (empty strings hide all commit/PR attribution); the footer is governed by this rule.
 
 ## Skills
 
