@@ -6,4 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
 <!-- Add entries here as you ship changes. Keep a Changelog groups: Added, Changed, Deprecated, Removed, Fixed, Security. On the first release, retitle this section to `## [X.Y.Z] - <date>` — scripts/extract-changelog.sh extracts the matching `## [X.Y.Z]` section, and tagging is the repository owner's act. -->

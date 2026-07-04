@@ -1,3 +1,7 @@
+// Package config loads and validates all environment configuration into typed
+// structs at startup. It is the single place os.Getenv is called; malformed or
+// invalid values fail fast with the offending variable name rather than
+// silently defaulting.
 package config
 
 import (

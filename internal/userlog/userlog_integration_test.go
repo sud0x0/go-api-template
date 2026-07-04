@@ -117,9 +117,6 @@ func TestLogRepository_CRUD_Integration(t *testing.T) {
 		t.Errorf("getLog id mismatch: got %s want %s", got.ID, created.ID)
 	}
 
-	// Sleep enough for NOW() to advance past created.UpdatedAt.
-	time.Sleep(10 * time.Millisecond)
-
 	updated, err := repo.updateLog(ctx, created.ID, userID, "updated content")
 	if err != nil {
 		t.Fatalf("updateLog: %v", err)
@@ -127,8 +124,41 @@ func TestLogRepository_CRUD_Integration(t *testing.T) {
 	if updated.Log != "updated content" {
 		t.Errorf("updated content mismatch: got %q", updated.Log)
 	}
-	if !updated.UpdatedAt.After(created.UpdatedAt) {
-		t.Errorf("updated_at did not advance after update — trigger may be missing or migration drifted")
+
+	// Prove the update_logs_updated_at trigger sets updated_at = NOW() on UPDATE,
+	// deterministically — no sleep, no comparison of two near-simultaneous
+	// wall-clock timestamps. The trigger fires on UPDATE, not INSERT, so a direct
+	// INSERT with a fixed, long-past sentinel updated_at makes the sentinel stick;
+	// a real update through the repository must then move updated_at OFF it. The
+	// assertion compares against a constant (year 2000), so it never depends on
+	// elapsed real time.
+	const sentinel = "2000-01-01T00:00:00Z"
+	sentinelTime, err := time.Parse(time.RFC3339, sentinel)
+	if err != nil {
+		t.Fatalf("parse sentinel: %v", err)
+	}
+	dtTime, err := time.Parse(time.RFC3339, dt)
+	if err != nil {
+		t.Fatalf("parse dt: %v", err)
+	}
+	var seededID string
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO logs (user_id, date_and_time, log, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $4) RETURNING id`,
+		userID, dtTime, "seed for updated_at trigger proof", sentinelTime,
+	).Scan(&seededID); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM logs WHERE id = $1", seededID)
+	})
+	seeded, err := repo.updateLog(ctx, seededID, userID, "trigger moves updated_at")
+	if err != nil {
+		t.Fatalf("updateLog (seeded row): %v", err)
+	}
+	if !seeded.UpdatedAt.After(sentinelTime) {
+		t.Errorf("updated_at did not move off the seeded sentinel: got %s want a time after %s — the update_logs_updated_at trigger may be missing or the migration drifted",
+			seeded.UpdatedAt.Format(time.RFC3339), sentinel)
 	}
 
 	logs, err := repo.getLogs(ctx, userID,
@@ -464,5 +494,159 @@ func TestLogService_CursorWalk_ConcurrentInsert_Integration(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("mid-walk inserted row %s (older than the cursor) should have appeared", midID)
+	}
+}
+
+// driveHandler runs a single handler method for a given path id and user, with
+// the chi route context and user-id context the real router would set. Mirrors
+// the wiring in TestLogHandler_InvalidUUID_Integration.
+func driveHandler(t *testing.T, h func(http.ResponseWriter, *http.Request), method, id, userID string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "/api/v1/logs/"+id, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := shared.WithUserID(req.Context(), userID)
+	chiCtx := chi.NewRouteContext()
+	chiCtx.URLParams.Add("id", id)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, chiCtx)
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	h(rr, req)
+	return rr
+}
+
+// TestLogRepository_CrossUserIsolation_Integration proves object-level
+// authorization: user B can never reach user A's row by id or by listing.
+// This is OWASP API Top 10 API1:2023 Broken Object Level Authorization (BOLA)
+// and ASVS V8 (8.2.2 / 8.3.1 / 8.4.1). The control is the `AND user_id = $N`
+// predicate in every repository query; removing it from ANY one query makes
+// this test fail (the tripwire proof is recorded in the round report). Before
+// this test, deleting that predicate passed the entire suite.
+func TestLogRepository_CrossUserIsolation_Integration(t *testing.T) {
+	database := setupIntegrationDB(t)
+	repo := NewLogRepository(database.Pool())
+	svc := NewLogService(repo, database)
+	handler := NewLogHandler(svc, &integrationLogger{}, &noopHandlerMetrics{})
+
+	const (
+		userA = "a0000000-0000-4000-8000-00000000000a"
+		userB = "b0000000-0000-4000-8000-00000000000b"
+	)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = database.Pool().Exec(ctx,
+			"DELETE FROM logs WHERE user_id = ANY($1)", []string{userA, userB})
+	})
+
+	// A owns one private row.
+	aRow, err := repo.createLog(ctx, userA, "2025-01-15T10:00:00Z", "user A private row")
+	if err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+	// B owns its own rows, so B's list views are non-empty and must still exclude A's.
+	for _, dt := range []string{"2025-02-01T10:00:00Z", "2025-02-01T11:00:00Z"} {
+		if _, err := repo.createLog(ctx, userB, dt, "user B row"); err != nil {
+			t.Fatalf("seed B: %v", err)
+		}
+	}
+
+	// Enforcement point: B's direct repository read of A's row must fail.
+	if _, err := repo.getLog(ctx, aRow.ID, userB); err == nil {
+		t.Error("BOLA: repo.getLog let user B read user A's row")
+	}
+
+	// Handler layer: GET / PUT / DELETE of A's id as user B → 404 (never a 200 leak).
+	updateBody, err := json.Marshal(UpdateRequest{Log: "hijacked by B"})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, c := range []struct {
+		name   string
+		method string
+		body   []byte
+		h      func(http.ResponseWriter, *http.Request)
+	}{
+		{"GET", http.MethodGet, nil, handler.GetLog},
+		{"PUT", http.MethodPut, updateBody, handler.UpdateLog},
+		{"DELETE", http.MethodDelete, nil, handler.DeleteLog},
+	} {
+		t.Run(c.name+"_of_As_row_as_B_is_404", func(t *testing.T) {
+			rr := driveHandler(t, c.h, c.method, aRow.ID, userB, c.body)
+			if rr.Code != http.StatusNotFound {
+				t.Errorf("%s A's row as B: got %d want 404 (body: %s)",
+					c.method, rr.Code, rr.Body.String())
+			}
+		})
+	}
+
+	// Offset-mode list as B must not contain A's row.
+	offset, err := repo.getLogs(ctx, userB,
+		"1970-01-01T00:00:00Z", "2099-12-31T23:59:59Z", 100, 0)
+	if err != nil {
+		t.Fatalf("offset list B: %v", err)
+	}
+	for _, l := range offset {
+		if l.ID == aRow.ID {
+			t.Error("BOLA: offset list for user B contained user A's row")
+		}
+	}
+
+	// Cursor-mode walk as B must not contain A's row (walkCursor also fails on dupes).
+	for _, id := range walkCursor(t, svc, userB, 2, nil) {
+		if id == aRow.ID {
+			t.Error("BOLA: cursor walk for user B contained user A's row")
+		}
+	}
+
+	// A's row still exists and is unchanged — B's PUT/DELETE did nothing.
+	after, err := repo.getLog(ctx, aRow.ID, userA)
+	if err != nil {
+		t.Fatalf("A's row must still exist after B's attempts: %v", err)
+	}
+	if after.Log != "user A private row" {
+		t.Errorf("A's row content changed to %q — a cross-user write leaked", after.Log)
+	}
+}
+
+// TestLogRepository_InjectionContent_RoundTrips_Integration stores a classic
+// SQL-injection payload as ordinary log content and proves it round-trips
+// byte-for-byte while the table survives. Parameterised queries (ASVS 1.2.4)
+// make the string data, never SQL.
+//
+// This is REGRESSION INSURANCE, not detection: it does not "catch" injection in
+// the current code (there is none). It exists to fail loudly if a future
+// refactor ever string-builds a query — at which point this payload would
+// execute (dropping the table) instead of round-tripping.
+func TestLogRepository_InjectionContent_RoundTrips_Integration(t *testing.T) {
+	database := setupIntegrationDB(t)
+	repo := NewLogRepository(database.Pool())
+
+	const userID = "c0000000-0000-4000-8000-00000000000c"
+	const payload = "'; DROP TABLE logs;--"
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = database.Pool().Exec(ctx, "DELETE FROM logs WHERE user_id = $1", userID)
+	})
+
+	created, err := repo.createLog(ctx, userID, "2025-01-15T10:00:00Z", payload)
+	if err != nil {
+		t.Fatalf("createLog with injection payload: %v", err)
+	}
+	if created.Log != payload {
+		t.Errorf("stored content mutated: got %q want %q", created.Log, payload)
+	}
+
+	got, err := repo.getLog(ctx, created.ID, userID)
+	if err != nil {
+		t.Fatalf("getLog: %v", err)
+	}
+	if got.Log != payload {
+		t.Errorf("round-trip mismatch: got %q want %q", got.Log, payload)
+	}
+
+	// If the payload had executed, `logs` would be gone and this follow-up query
+	// would error. It succeeding proves the table survived.
+	if _, err := repo.getLogs(ctx, userID,
+		"1970-01-01T00:00:00Z", "2099-12-31T23:59:59Z", 10, 0); err != nil {
+		t.Fatalf("follow-up query failed — logs table may be gone: %v", err)
 	}
 }

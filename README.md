@@ -1,8 +1,12 @@
 # Go API Template
 
-Production-ready Go API template. Layered architecture (handler → service → repository), one package per feature. Native pgx v5, embedded SQL migrator with Postgres session locking, Prometheus-instrumented end-to-end, GoReleaser pipeline with SLSA Level 3 provenance and a manually-written changelog.
+A production-ready template for building REST APIs in Go, backed by PostgreSQL. Fork it, rename it, and add your features — the security, testing, and release tooling is already wired.
 
-The [`internal/userlog`](internal/userlog/) package is the canonical feature. Copy it for every new feature.
+## Who it's for
+
+Teams starting a new Go backend who want solid security, testing, and release habits already in place. You get them wired in, not rebuilt each time. It well suits AI coding agents: the conventions are written down, so an agent can extend the code without guessing. You should know basic Go, and have Podman and `make` installed.
+
+The rest of this file is reference material. The [Quick start](#quick-start) gets you running. The sections below cover configuration, deployment, and conventions in depth.
 
 ---
 
@@ -10,21 +14,24 @@ The [`internal/userlog`](internal/userlog/) package is the canonical feature. Co
 
 1.  [Project layout](#project-layout)
 2.  [Quick start](#quick-start)
-3.  [Configuration](#configuration)
-4.  [Adding a feature](#adding-a-feature)
-5.  [Authentication](#authentication)
-6.  [Database](#database)
-7.  [Pagination](#pagination)
-7.  [Migrations](#migrations)
-8.  [Observability](#observability)
-9.  [HTTP security](#http-security)
-10. [Deployment requirements](#deployment-requirements)
-11. [Coding rules](#coding-rules)
-11. [Scaling](#scaling)
-12. [Releases](#releases)
-13. [Continuous integration](#continuous-integration)
-14. [Makefile reference](#makefile-reference)
-15. [Changelog](#changelog)
+3.  [Forking the template](#forking-the-template)
+4.  [Configuration](#configuration)
+5.  [Adding a feature](#adding-a-feature)
+6.  [Authentication](#authentication)
+7.  [Database](#database)
+8.  [Pagination](#pagination)
+9.  [Migrations](#migrations)
+10. [Observability](#observability)
+11. [HTTP security](#http-security)
+12. [Deployment requirements](#deployment-requirements)
+13. [Coding rules](#coding-rules)
+14. [Scaling](#scaling)
+15. [Releases](#releases)
+16. [Continuous integration](#continuous-integration)
+17. [Makefile reference](#makefile-reference)
+18. [Changelog](#changelog)
+19. [Help](#help)
+20. [License](#license)
 
 ---
 
@@ -63,37 +70,43 @@ The reference feature package is `userlog` (not `log`) because the stdlib alread
 
 ## Quick start
 
+You need [Go](https://go.dev/dl/), [Podman](https://podman.io/), and `make`. From the project root:
+
 ```bash
-# 1. Rename the module (once, when you fork the template). One repo-wide sweep
-#    over EVERY tracked file — nothing is excluded. (The module-rename history
-#    lives in git, not the CHANGELOG: the changelog was reset at 0.1.0 and no
-#    longer carries the old path verbatim — see its reset notice.)
-git grep -l 'github.com/sud0x0/go-api-template' \
-  | xargs sed -i 's|github.com/sud0x0/go-api-template|github.com/your/repo|g'
-# Why repo-wide, not just *.go: the module path is also a `-ldflags -X`
-# version-injection target in .goreleaser.yaml and container.prod, and appears
-# in doc comments (internal/version/version.go) — not only in Go imports.
-# Go DROPS an unmatched -X flag SILENTLY, so a *.go-only rename leaves every
-# forked release/container reporting dev/unknown versions with no build error.
-
-# 2. First-time setup: copies .env.example to .env, installs pre-commit hooks, builds containers.
-make setup
-
-# 3. Daily: start the stack.
-make run
-
-# 4. Verify.
-curl http://localhost:8080/livez    # process responsive
-curl http://localhost:8080/readyz   # process + database
-curl http://localhost:9090/metrics  # Prometheus, on the internal admin port
+cp .env.example .env   # the defaults work for local development
+make setup             # install git hooks and build the containers
+make run               # start PostgreSQL and the API, with hot reload
 ```
 
-The app exposes two listeners:
+Confirm it works:
 
-- **`:8080`** — public API + health endpoints
-- **`:9090`** — internal admin (`/metrics`, mirrored `/livez` and `/readyz`)
+```bash
+curl http://localhost:8080/livez    # {"status":"alive"}   — the API is running
+curl http://localhost:8080/readyz   # {"status":"healthy"} — it can reach the database
+```
 
-Restrict the internal port at the infrastructure layer (NetworkPolicy / firewall / private network). It has no authentication.
+Every route is protected by default, so a business call returns `401` until you add authentication:
+
+```bash
+curl http://localhost:8080/api/v1/logs   # {"error":"unauthorised", ...}
+```
+
+The app opens two ports. Port `8080` serves the API and its health checks. Port `9090` serves internal metrics for Prometheus (a monitoring tool). It has no login, so keep it off the public internet — use a firewall or a private network.
+
+Forking this for your own project? Do the module rename first — see [Forking the template](#forking-the-template).
+
+---
+
+## Forking the template
+
+When you fork this template for a real project, rename the Go module path once, across the whole repo:
+
+```bash
+git grep -l 'github.com/sud0x0/go-api-template' \
+  | xargs sed -i 's|github.com/sud0x0/go-api-template|github.com/your/repo|g'
+```
+
+Rename in **every** tracked file, not just `*.go`. The module path is also a `-ldflags -X` version-injection target in `.goreleaser.yaml` and `container.prod`, and it appears in doc comments (`internal/version/version.go`). Go silently drops an unmatched `-X` flag, so a `*.go`-only rename leaves every forked release and container reporting `dev`/`unknown` versions with no build error. (The old path is not in the changelog — it was reset at 0.1.0; the rename history lives in git.)
 
 ---
 
@@ -109,29 +122,29 @@ All env vars are read once at startup by [`internal/config`](internal/config/con
 
 ### Optional
 
-| Variable                          | Default       | Notes                                                                        |
-| --------------------------------- | ------------- | ---------------------------------------------------------------------------- |
-| `PORT`                            | `8080`        | Public API port                                                              |
-| `METRICS_PORT`                    | `9090`        | Internal admin port — restrict at infra layer                                |
-| `SERVER_READ_HEADER_TIMEOUT_SECS` | `5`           |                                                                              |
-| `SERVER_READ_TIMEOUT_SECS`        | `10`          |                                                                              |
-| `SERVER_WRITE_TIMEOUT_SECS`       | `65`          | Must be > `SERVER_REQUEST_TIMEOUT_SECS` (validated at startup)               |
-| `SERVER_IDLE_TIMEOUT_SECS`        | `120`         |                                                                              |
-| `SERVER_REQUEST_TIMEOUT_SECS`     | `60`          | Per-request handler timeout (chi Timeout)                                    |
-| `LOG_LEVEL`                       | `production`  | `development` / `production` / `quiet` / `silent` (default is fail-safe `production`) |
-| `DB_SSLMODE`                      | `require`     |                                                                              |
-| `DB_MAX_OPEN_CONNS`               | `100`         | pgxpool MaxConns                                                             |
-| `DB_MIN_CONNS`                    | `10`          | pgxpool MinConns (eagerly maintained)                                        |
-| `DB_CONN_MAX_LIFETIME_MINS`       | `5`           |                                                                              |
-| `DB_CONN_MAX_IDLE_TIME_MINS`      | `10`          |                                                                              |
-| `TRUST_PROXY_HEADERS`             | `false`       | Trust `X-Forwarded-For`/`X-Real-IP` (`chimw.RealIP`). Enable only behind a trusted proxy. |
-| `RATE_LIMIT_RPM`                  | `0`           | App-level requests/min per IP. `0` disables (middleware not registered). Edge-less fallback only. |
-| `PUBLIC_READINESS`                | `true`        | Serve `/readyz` + `/health` on the public listener. `false` keeps them internal-only. |
-| `CORS_ALLOWED_ORIGINS`            | (empty)       | Comma-separated. Never `*` in production.                                    |
-| `CORS_ALLOW_CREDENTIALS`          | `false`       | Set `true` only if browser clients send cookies                              |
-| `MIGRATOR_LOCK_TIMEOUT`           | `5s`          | Postgres `lock_timeout` for the migration session                            |
-| `MIGRATOR_STATEMENT_TIMEOUT`      | `10min`       | Postgres `statement_timeout` for the migration session                       |
-| `MIGRATOR_ALLOW_DESTRUCTIVE`      | `false`       | Gate for `down`/`down-to`/`redo`/`reset` (needs `--confirm-destructive` too) |
+| Variable                          | Default      | Notes                                                                                             |
+| --------------------------------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| `PORT`                            | `8080`       | Public API port                                                                                   |
+| `METRICS_PORT`                    | `9090`       | Internal admin port — restrict at infra layer                                                     |
+| `SERVER_READ_HEADER_TIMEOUT_SECS` | `5`          |                                                                                                   |
+| `SERVER_READ_TIMEOUT_SECS`        | `10`         |                                                                                                   |
+| `SERVER_WRITE_TIMEOUT_SECS`       | `65`         | Must be > `SERVER_REQUEST_TIMEOUT_SECS` (validated at startup)                                    |
+| `SERVER_IDLE_TIMEOUT_SECS`        | `120`        |                                                                                                   |
+| `SERVER_REQUEST_TIMEOUT_SECS`     | `60`         | Per-request handler timeout (chi Timeout)                                                         |
+| `LOG_LEVEL`                       | `production` | `development` / `production` / `quiet` / `silent` (default is fail-safe `production`)             |
+| `DB_SSLMODE`                      | `require`    |                                                                                                   |
+| `DB_MAX_OPEN_CONNS`               | `100`        | pgxpool MaxConns                                                                                  |
+| `DB_MIN_CONNS`                    | `10`         | pgxpool MinConns (eagerly maintained)                                                             |
+| `DB_CONN_MAX_LIFETIME_MINS`       | `5`          |                                                                                                   |
+| `DB_CONN_MAX_IDLE_TIME_MINS`      | `10`         |                                                                                                   |
+| `TRUST_PROXY_HEADERS`             | `false`      | Trust `X-Forwarded-For`/`X-Real-IP` (`chimw.RealIP`). Enable only behind a trusted proxy.         |
+| `RATE_LIMIT_RPM`                  | `0`          | App-level requests/min per IP. `0` disables (middleware not registered). Edge-less fallback only. |
+| `PUBLIC_READINESS`                | `true`       | Serve `/readyz` + `/health` on the public listener. `false` keeps them internal-only.             |
+| `CORS_ALLOWED_ORIGINS`            | (empty)      | Comma-separated. Never `*` in production.                                                         |
+| `CORS_ALLOW_CREDENTIALS`          | `false`      | Set `true` only if browser clients send cookies                                                   |
+| `MIGRATOR_LOCK_TIMEOUT`           | `5s`         | Postgres `lock_timeout` for the migration session                                                 |
+| `MIGRATOR_STATEMENT_TIMEOUT`      | `10min`      | Postgres `statement_timeout` for the migration session                                            |
+| `MIGRATOR_ALLOW_DESTRUCTIVE`      | `false`      | Gate for `down`/`down-to`/`redo`/`reset` (needs `--confirm-destructive` too)                      |
 
 ### Version banner
 
@@ -196,14 +209,14 @@ Authentication is **deliberately not implemented** in this template — the cont
 
 ### Contract
 
-| Item             | Where                                                                   |
-| ---------------- | ----------------------------------------------------------------------- |
-| Context key      | `shared.WithUserID(ctx, id)` / `shared.UserIDFromContext(ctx)` (key lives in `internal/shared`) |
+| Item             | Where                                                                                              |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| Context key      | `shared.WithUserID(ctx, id)` / `shared.UserIDFromContext(ctx)` (key lives in `internal/shared`)    |
 | User ID format   | **Must be a UUID.** `UserIDFromContext` canonicalises it and rejects non-UUIDs as 401 (see below). |
-| Repository scope | Every query already has `WHERE … AND user_id = $N`                      |
-| Wire point       | The `r.Route("/api/v1", …)` block in `cmd/api/main.go`                  |
-| 401 response     | `shared.WriteUnauthorised(w, errorType, message)` (JSON envelope + `WWW-Authenticate`) |
-| Metric on 401    | `api_errors_total{feature="log",error_type="unauthorised"}` (automatic) |
+| Repository scope | Every query already has `WHERE … AND user_id = $N`                                                 |
+| Wire point       | The `r.Route("/api/v1", …)` block in `cmd/api/main.go`                                             |
+| 401 response     | `shared.WriteUnauthorised(w, errorType, message)` (JSON envelope + `WWW-Authenticate`)             |
+| Metric on 401    | `api_errors_total{feature="log",error_type="unauthorised"}` (automatic)                            |
 
 > **UUIDs only.** The `user_id` column is `UUID NOT NULL`, so `shared.UserIDFromContext` is the single enforcement point: it parses the stored value, returns the canonical lowercase UUID, and reports `ok=false` (→ 401) for anything that is not a UUID — keeping a non-UUID subject from reaching a query and surfacing as a confusing 500 (`error_type="database"`). If your IdP's `sub` is **not** a UUID (e.g. `auth0|12345`, an email, a numeric id), map it to an internal UUID in your middleware (a `sub → uuid` lookup table) **before** calling `shared.WithUserID`. `WithUserID` itself is a plain setter — validation lives only at the read point so it can't be bypassed by a second writer.
 
@@ -258,13 +271,13 @@ err := database.WithTransaction(ctx, func(tx pgx.Tx) error {
 
 ### Which to use
 
-| | **Cursor (keyset)** — recommended | **Offset** — legacy / shallow |
-| --- | --- | --- |
-| Query | `?cursor=` (first page), then echo `next_cursor` | `?limit&offset` |
-| Response | `{"logs":[…],"next_cursor":"…"}` | bare array `[…]` |
-| Cost | constant per page (index seek) | grows with depth (walk-and-discard) |
-| Under concurrent inserts | stable — no shifted/duplicated rows | pages shift; rows can repeat or be skipped |
-| Depth | unbounded | **hard cap at `offset` 10000** — deeper rows are unreachable |
+|                          | **Cursor (keyset)** — recommended                | **Offset** — legacy / shallow                                |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------ |
+| Query                    | `?cursor=` (first page), then echo `next_cursor` | `?limit&offset`                                              |
+| Response                 | `{"logs":[…],"next_cursor":"…"}`                 | bare array `[…]`                                             |
+| Cost                     | constant per page (index seek)                   | grows with depth (walk-and-discard)                          |
+| Under concurrent inserts | stable — no shifted/duplicated rows              | pages shift; rows can repeat or be skipped                   |
+| Depth                    | unbounded                                        | **hard cap at `offset` 10000** — deeper rows are unreachable |
 
 **Use cursor pagination for anything that can exceed a few thousand rows or is read while being written.** Offset stays for shallow human browsing (jump to page N) and backwards compatibility, but its `10000` cap is a hard reachability limit, not a soft default — past it, switch to cursor.
 
@@ -381,23 +394,29 @@ Every line is JSON to stdout (no log files, no rotation in the app — the orche
 
 ```json
 {
-  "time":"2026-06-07T15:30:00+10:00", "level":"INFO", "msg":"creating log entry",
-  "service":"go-api", "version":"1.2.3", "commit":"abc1234",
-  "request_id":"req-xyz",
-  "method":"POST", "path":"/api/v1/logs", "ip":"203.0.113.5:1234",
-  "user_id":"u-42"
+  "time": "2026-06-07T15:30:00+10:00",
+  "level": "INFO",
+  "msg": "creating log entry",
+  "service": "go-api",
+  "version": "1.2.3",
+  "commit": "abc1234",
+  "request_id": "req-xyz",
+  "method": "POST",
+  "path": "/api/v1/logs",
+  "ip": "203.0.113.5:1234",
+  "user_id": "u-42"
 }
 ```
 
-| Field | Source | When present |
-|---|---|---|
-| `time` | slog default, formatted RFC3339 | every line |
-| `level`, `msg` | slog default | every line |
-| `service`, `version`, `commit` | `NewLogger(level, serviceName)` — bound once via `WithAttrs`; version/commit come from `internal/version` (`-ldflags`) | every line |
-| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext` | every line emitted during an HTTP request |
-| `user_id` | re-bound by an auth middleware (recommended pattern) | every line emitted *after* auth fires |
-| `error`, `actual_error` | only on `LogError` | error lines |
-| `status`, `duration_ms` | only on the "request completed" line | end-of-request lines |
+| Field                                | Source                                                                                                                 | When present                              |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `time`                               | slog default, formatted RFC3339                                                                                        | every line                                |
+| `level`, `msg`                       | slog default                                                                                                           | every line                                |
+| `service`, `version`, `commit`       | `NewLogger(level, serviceName)` — bound once via `WithAttrs`; version/commit come from `internal/version` (`-ldflags`) | every line                                |
+| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                    | every line emitted during an HTTP request |
+| `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                   | every line emitted _after_ auth fires     |
+| `error`, `actual_error`              | only on `LogError`                                                                                                     | error lines                               |
+| `status`, `duration_ms`              | only on the "request completed" line                                                                                   | end-of-request lines                      |
 
 **One log line is enough to identify the request, the route, the client, and (after auth) the user.** A handler that returns an internal error logs:
 
@@ -542,11 +561,11 @@ Add `REDIS_URL` + `REDIS_POOL_SIZE` to `.env.example`. No `os.Getenv` outside `i
 
 #### 2. Pick a queue library
 
-| Need | Use |
-|---|---|
+| Need                                                     | Use                                                                                                       |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | Job queue with retries, scheduled, priority, idempotency | [`hibiken/asynq`](https://github.com/hibiken/asynq) (Redis-backed; production-ready; ships with a web UI) |
-| Lightweight pub/sub or streams | [`redis/go-redis/v9`](https://github.com/redis/go-redis) directly with Redis Streams |
-| Distributed cache / rate limiting | `redis/go-redis/v9` — no queue layer needed |
+| Lightweight pub/sub or streams                           | [`redis/go-redis/v9`](https://github.com/redis/go-redis) directly with Redis Streams                      |
+| Distributed cache / rate limiting                        | `redis/go-redis/v9` — no queue layer needed                                                               |
 
 This template doesn't include any of them by default. Add what you actually need.
 
@@ -594,15 +613,15 @@ Add a third build to `.goreleaser.yaml`:
 
 ```yaml
 builds:
-  - id: api         # existing
+  - id: api # existing
     main: ./cmd/api
     binary: go-api
     # … same ldflags
-  - id: migrator    # existing
+  - id: migrator # existing
     main: ./cmd/migrate
     binary: go-api-migrator
     # … same ldflags
-  - id: worker      # new
+  - id: worker # new
     main: ./cmd/worker
     binary: go-api-worker
     # … same ldflags
@@ -735,17 +754,17 @@ This is a **request, not an enforced gate** — no hook or CI job rejects other 
 
 ### Tests + lint
 
-| Command                               | Description                                           |
-| ------------------------------------- | ----------------------------------------------------- |
-| `make ci`                             | Umbrella gate (no podman): `go build` + `go vet` + `golangci-lint` + race unit tests |
-| `make verify`                         | Full pre-commit gate (podman): `ci` + integration tests |
+| Command                               | Description                                                                               |
+| ------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `make ci`                             | Umbrella gate (no podman): `go build` + `go vet` + `golangci-lint` + race unit tests      |
+| `make verify`                         | Full pre-commit gate (podman): `ci` + integration tests                                   |
 | `make test-unit`                      | Race-enabled unit tests (pgxmock — no real DB needed). `make test` is a deprecated alias. |
-| `make test-pretty`                    | Table-formatted output over the same `-race` unit suite |
-| `make test-integration`               | Real-Postgres integration tests (requires `make run`) |
-| `make test-scripts`                   | Shell-script Go tests (extract-changelog fixture)     |
-| `make lint` / `make fmt` / `make vet` | golangci-lint / gofmt / go vet                        |
-| `make vulncheck` / `make semgrep`     | govulncheck / semgrep                                 |
-| `make pre-commit-run`                 | Run every hook against every file                     |
+| `make test-pretty`                    | Table-formatted output over the same `-race` unit suite                                   |
+| `make test-integration`               | Real-Postgres integration tests (requires `make run`)                                     |
+| `make test-scripts`                   | Shell-script Go tests (extract-changelog fixture)                                         |
+| `make lint` / `make fmt` / `make vet` | golangci-lint / gofmt / go vet                                                            |
+| `make vulncheck` / `make semgrep`     | govulncheck / semgrep                                                                     |
+| `make pre-commit-run`                 | Run every hook against every file                                                         |
 
 ### Release
 

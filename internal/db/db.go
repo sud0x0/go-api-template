@@ -1,3 +1,6 @@
+// Package db wraps the pgx connection pool behind the PgxIface abstraction and
+// provides the WithTransaction helper, so repositories run the same code inside
+// and outside a transaction.
 package db
 
 import (

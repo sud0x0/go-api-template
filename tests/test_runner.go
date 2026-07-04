@@ -1,5 +1,8 @@
 //go:build ignore
 
+// Command test-runner renders `go test -json` output as a compact,
+// human-readable table. It is a standalone tool (build-tagged ignore, so it is
+// excluded from the API build) invoked by the Makefile's pretty test target.
 package main
 
 import (

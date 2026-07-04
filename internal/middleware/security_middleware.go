@@ -1,3 +1,5 @@
+// Package middleware provides the HTTP middleware the router composes: CORS,
+// security response headers, and the structured request logger.
 package middleware
 
 import "net/http"

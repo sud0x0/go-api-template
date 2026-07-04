@@ -1,3 +1,7 @@
+// Package shared holds cross-feature concerns that must not live in any single
+// feature package: input validation and the rune-length validators, the JSON
+// error envelope, request limits, and the UUID user-ID identity boundary.
+// Feature packages import shared; shared never imports a feature.
 package shared
 
 import (

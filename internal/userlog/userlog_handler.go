@@ -1,3 +1,7 @@
+// Package userlog is the reference feature package: the canonical
+// handler → service → repository slice to copy for every new feature. It is
+// named userlog, not log, to avoid shadowing the standard library's log
+// package.
 package userlog
 
 import (

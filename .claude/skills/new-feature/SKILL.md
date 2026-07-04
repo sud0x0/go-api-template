@@ -217,10 +217,15 @@ If `make db-migrate` fails, your migration is wrong — fix it before running in
 
 Then **review the new package** with the two review skills, and fix what they raise:
 
-- `/security-review internal/<feature>/` — the seven rules + template-specific checks (user_id scoping, bounded labels, strict decoding, UUID boundary) and the scanner suite.
+- `/security-review internal/<feature>/` — the seven rules mapped to OWASP ASVS 5.0.0 (Level 2) via the applicability map + template-specific checks (user_id scoping, bounded labels, strict decoding, UUID boundary) and the scanner suite.
 - `/architecture-review internal/<feature>/` — layering, the `Routes`/`RequiredTables` surface, the `ErrType*` ↔ `handleError` contract test, and single-source-of-truth.
 
-Finally, run the **verification loop from [CLAUDE.md](../../../CLAUDE.md)**: `make ci` (no podman) after every change, and `make verify` (podman: `ci` + integration tests) before committing the new feature.
+Write the package's tests and comments to the house style while you go:
+
+- `/write-unit-tests internal/<feature>/` — table-driven subtests, behaviour-over-implementation assertions, the layer rule (pgxmock at the repository, the real-router 413 test as the model), `-race`, and a tripwire proof for each guarded invariant (the `user_id` scope, the body cap). No coverage-percentage gate.
+- `/write-comments internal/<feature>/` — why-not-what, evidence comments, `decisions.md` citations, `Template surface:` markers, and `TODO(scope): … — <pointer>`; keep every comment in sync with the code in the same change.
+
+Finally, run the **verification loop from [CLAUDE.md](../../../CLAUDE.md)**: `make ci` (no podman) after every change, and `make verify` (podman: `ci` + integration tests) before finishing. **Do not commit** — per the never-commit rule, leave the new feature uncommitted and, in your report, propose a Conventional Commit message for the owner (e.g. `feat(<feature>): add CRUD endpoints under /api/v1/<features>`).
 
 ## Non-negotiables
 

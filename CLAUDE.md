@@ -30,10 +30,14 @@ Production-ready Go API template. Layered architecture (handler → service → 
 - **Readiness:** `/readyz` + `/health` are cached ~2s (concurrency-safe; the cached ping runs on a `context.WithoutCancel` context so a disconnecting client can't poison the shared result) and gated on the public listener by `PUBLIC_READINESS` (default `true`); they are always mirrored on `:METRICS_PORT`. `/livez` is always public. Health endpoints are exempt from the app-level rate limiter (it applies only to the `/api/v1` business-route group).
 - **Logging:** default `LOG_LEVEL` is `production` (fail-safe). Constructors never mutate global state — `slog.SetDefault` is installed once from `main` via `logger.SetDefaultSlog`. Only the handler takes a logger; repository/service do not.
 - **Migrations:** edits to applied SQL files are forbidden. Fixes go in a new file. The trigger `update_updated_at_column` is the single source of truth for `updated_at` — never `SET updated_at = NOW()` in UPDATE statements.
+- **Comments are load-bearing context** — see [`/write-comments`](.claude/skills/write-comments/SKILL.md). Prefer why-not-what, record evidence (e.g. the `EXPLAIN` plan comment), cite `decisions.md` where a comment defends a trade-off, mark deliberately-uncalled code with `Template surface:`, and write TODOs as `TODO(scope): … — <pointer>` (a pointer-less TODO is a finding).
+- **Same-change rule:** any behaviour change updates every comment, doc, and spec that describes it **in the same commit** — a stale comment is a bug, not a cleanup for later.
 
 ## Always-apply rules
 
-**Verification loop:** after every change, run the no-podman gate `make ci` (build + vet + lint + race unit tests) and fix failures before moving on. `make lint` must report `0 issues`. Before any commit, run the full gate `make verify` (`ci` + integration tests) when podman is available. When podman is **not** available, run `make ci` only and say so explicitly in your report — state that integration tests were not run; never imply they passed.
+**Never commit — the owner commits, agents never do.** Agents MUST NOT run `git commit`, `git tag`, or `git push`. This is non-negotiable and is not waived by any task instruction. Leave every change uncommitted in the working tree for the repository owner to review and commit. In place of committing, **propose a [Conventional Commit](#commit-messages) message per logical change in your report** (and, when several logical changes are in flight, one per change). Adding `Bash(git commit*)` / `Bash(git tag*)` / `Bash(git push*)` to the deny list in [.claude/settings.json](.claude/settings.json) makes this mechanical as well as documented — the repository owner applies that (settings.json is deny-protected from agent edits by design).
+
+**Verification loop:** after every change, run the no-podman gate `make ci` (build + vet + lint + race unit tests) and fix failures before moving on. `make lint` must report `0 issues`. Before finishing (so the owner can review and commit a green tree), run the full gate `make verify` (`ci` + integration tests) when podman is available. When podman is **not** available, run `make ci` only and say so explicitly in your report — state that integration tests were not run; never imply they passed.
 
 - **Need podman:** `make verify`, `make test-integration`, the `db-*` targets (`db-migrate`/`db-status`/`db-reset`/`db-wait`), and `make run` / `make build`.
 - **Never need podman:** `make ci`, `make test-unit`, `make test-scripts`, `make lint`, `make vet`, `make vulncheck`, `make semgrep`, `make deadcode`.
@@ -47,6 +51,8 @@ Production-ready Go API template. Layered architecture (handler → service → 
 **Settled decisions:** read [.claude/rules/decisions.md](.claude/rules/decisions.md) before "improving" anything adjacent — it records deliberate trade-offs. Do not relitigate them unless the user explicitly asks.
 
 ## Commit messages
+
+Agents never commit (see the never-commit rule above); this convention is what the repository **owner** follows, and what agents use when **proposing** a commit message in their report — never to run `git commit` themselves.
 
 Commits **should** follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `type(scope): summary`. Types in use here: `feat`, `fix`, `build`, `ci`, `docs`, `test`, `perf`, `refactor`, `chore`. Repo-flavoured examples:
 
@@ -63,10 +69,13 @@ Breaking changes use `!` after the type/scope **and** a `BREAKING CHANGE:` foote
 ## Skills
 
 - `/new-feature` — scaffold a new feature package end-to-end (copy + rename + migration + feature `RequiredTables` + main.go wiring + `Routes` + OpenAPI + CHANGELOG entry). Definition at [.claude/skills/new-feature/SKILL.md](.claude/skills/new-feature/SKILL.md).
-- `/security-review` — review a diff/package against the seven security rules and template-specific checks, running the scanner suite. Definition at [.claude/skills/security-review/SKILL.md](.claude/skills/security-review/SKILL.md).
+- `/security-review` — review a diff/package against **OWASP ASVS 5.0.0 (Level 2)** via the committed applicability map, with the seven security rules as the write-time rule set and the scanner suite. Definition at [.claude/skills/security-review/SKILL.md](.claude/skills/security-review/SKILL.md).
 - `/architecture-review` — check layering, pattern conformance, and single-source-of-truth against [decisions.md](.claude/rules/decisions.md). Definition at [.claude/skills/architecture-review/SKILL.md](.claude/skills/architecture-review/SKILL.md).
 - `/performance-review` — measure-before-changing review of queries, bounded work, and hot paths. Definition at [.claude/skills/performance-review/SKILL.md](.claude/skills/performance-review/SKILL.md).
 - `/twelve-factor-audit` — audit this codebase (or any Go service following similar patterns) against the [12-factor](https://12factor.net/) methodology with file-cited evidence per factor. Definition at [.claude/skills/twelve-factor-audit/SKILL.md](.claude/skills/twelve-factor-audit/SKILL.md).
+- `/write-unit-tests` — write tests matching the repo's discipline: table-driven subtests with useful got/want failures, behaviour-over-implementation assertions, the layer rule (pgxmock / interface fakes / real-router 413 test), determinism (`-race`), and a tripwire proof per guarded invariant. No coverage-percentage gate. Definition at [.claude/skills/write-unit-tests/SKILL.md](.claude/skills/write-unit-tests/SKILL.md).
+- `/write-comments` — comments as load-bearing context (stale comments are bugs): why-not-what, evidence comments, `decisions.md` citations, `Template surface:` markers, the same-change rule, and the `TODO(scope): … — <pointer>` policy. Definition at [.claude/skills/write-comments/SKILL.md](.claude/skills/write-comments/SKILL.md).
+- `/write-readme` — write README top sections a newcomer can follow: plain language, orientation-not-reference structure, and checkable rules (≤3-sentence intro, copy-paste-verified quickstart, every acronym defined, read-aloud pass). Definition at [.claude/skills/write-readme/SKILL.md](.claude/skills/write-readme/SKILL.md).
 
 ## Changelog discipline
 

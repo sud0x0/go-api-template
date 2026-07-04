@@ -1,3 +1,7 @@
+// Package metrics defines the process's Prometheus instrumentation: HTTP,
+// connection-pool, query-tracer, and the bounded api_errors_total metrics.
+// Every label value comes from a constant or a chi route pattern, never from
+// user input, so cardinality stays bounded.
 package metrics
 
 import (

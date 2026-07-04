@@ -1,3 +1,7 @@
+// Command api is the go-api-template HTTP server entrypoint. It wires
+// configuration, database, metrics, logging, and middleware, then serves the
+// public API on :PORT and the internal admin listener (metrics and health) on
+// :METRICS_PORT. See the README "Quick start" to run it.
 package main
 
 import (
@@ -272,8 +276,9 @@ func main() {
 
 		// API routes.
 		r.Route("/api/v1", func(r chi.Router) {
-			// TODO: Wire auth middleware here. Any middleware that validates a token
-			// and stores the user ID on the request context with
+			// TODO(auth): wire auth middleware here — see .claude/rules/decisions.md
+			// #13 (auth is intentionally contract-only). Any middleware that validates
+			// a token and stores the user ID on the request context with
 			// shared.WithUserID(ctx, userID) will work automatically — handlers read
 			// it back via shared.UserIDFromContext. The key lives in internal/shared
 			// so infrastructure middleware never imports a feature package. All
