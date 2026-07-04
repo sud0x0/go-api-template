@@ -337,9 +337,16 @@ pre-commit-run:
 vulncheck:
 	@govulncheck -show verbose ./...
 
-# Run semgrep with auto config.
+# Run semgrep with pinned rulesets, not --config=auto: `auto` fetches whatever
+# the registry serves at scan time, so a passing run can start failing on an
+# upstream rule change. The two r/ rules (SHA-pinned actions, no curl|sh) are
+# not in p/github-actions and are pinned explicitly. Keep in sync with the
+# semgrep hook args in .pre-commit-config.yaml.
 semgrep:
-	@semgrep --config=auto --error --skip-unknown-extensions .
+	@semgrep --config=p/golang --config=p/github-actions \
+		--config=r/yaml.github-actions.security.github-actions-mutable-action-tag \
+		--config=r/yaml.github-actions.security.gha-curl-pipe-shell \
+		--error --skip-unknown-extensions .
 
 # Run Socket.dev supply chain scan.
 # Requires: npm install -g socket && socket login

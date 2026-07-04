@@ -13,6 +13,12 @@
       "Bash(podman images *)",
       "Bash(podman inspect *)",
       "Bash(podman info *)"
+    ],
+    "deny": [
+      "Edit(.claude/settings.json)",
+      "Write(.claude/settings.json)",
+      "Edit(.claude/settings.local.json)",
+      "Write(.claude/settings.local.json)"
     ]
   }
 }

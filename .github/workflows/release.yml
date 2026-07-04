@@ -19,18 +19,18 @@ jobs:
       hashes: ${{ steps.subjects.outputs.hashes }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0  # GoReleaser needs the full history for snapshot/version logic
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Install syft (SBOM generator)
-        uses: anchore/sbom-action/download-syft@v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
 
       # The CHANGELOG must already contain a section for the tag's version.
       # extract-changelog.sh fails if the section is missing or empty, which
@@ -53,7 +53,7 @@ jobs:
       # extracted CHANGELOG body verbatim (between the configured header
       # and footer) instead of trying to generate notes from commits.
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: '~> v2'
           args: release --clean --release-notes /tmp/release-notes.md

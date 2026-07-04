@@ -43,6 +43,16 @@ repos:
     hooks:
       - id: semgrep
         args:
-          - --config=auto
+          # Pinned rulesets instead of --config=auto. `auto` pulls whatever the
+          # semgrep registry serves at scan time, so a passing pipeline can
+          # start failing with no code change when upstream adds rules. These
+          # named configs cover this repo's surface (Go + GitHub Actions) and
+          # only run rules we've chosen, so the rule set no longer drifts.
+          - --config=p/golang
+          - --config=p/github-actions
+          # These two supply-chain rules are NOT in p/github-actions; pin them
+          # explicitly so we keep enforcing SHA-pinned actions and no curl|sh.
+          - --config=r/yaml.github-actions.security.github-actions-mutable-action-tag
+          - --config=r/yaml.github-actions.security.gha-curl-pipe-shell
           - --error
           - --skip-unknown-extensions
