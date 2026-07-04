@@ -2,8 +2,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # asvs-5.0.0.txt is a verbatim `pdftotext -layout` extraction of the ASVS
+      # PDF; it carries page-break form-feed bytes and no final newline. Exclude
+      # it from the whitespace-rewriting hooks so they don't mutate a generated,
+      # licensed artifact (it stays reproducible from a fresh extraction).
+      # gitleaks and check-added-large-files still scan it.
       - id: trailing-whitespace
+        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
       - id: end-of-file-fixer
+        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
       - id: check-yaml
       - id: check-added-large-files
       - id: check-merge-conflict

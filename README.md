@@ -30,8 +30,6 @@ The rest of this file is reference material. The [Quick start](#quick-start) get
 16. [Continuous integration](#continuous-integration)
 17. [Makefile reference](#makefile-reference)
 18. [Changelog](#changelog)
-19. [Help](#help)
-20. [License](#license)
 
 ---
 
