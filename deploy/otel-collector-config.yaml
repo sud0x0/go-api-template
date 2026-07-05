@@ -1,0 +1,49 @@
+# OpenTelemetry Collector config for LOCAL DEVELOPMENT (compose.dev.yaml).
+#
+# It receives OTLP from the app, batches, and then:
+#   - exports traces and metrics to the debug exporter, so you can watch them
+#     arrive with `podman logs -f app_otel_collector`, and
+#   - re-exposes metrics on a Prometheus scrape endpoint (:8889) so a local
+#     Prometheus or a plain `curl localhost:8889/metrics` can scrape them.
+#
+# The Prometheus exporter is the deliberate part of this template's model:
+# Prometheus lives at the Collector edge, not inside the Go app. The app pushes
+# OTLP and never serves a scrape endpoint of its own.
+#
+# This is NOT a production config: it has no TLS, no auth, and verbose debug
+# output. In production, point the app's OTLP endpoint at your real Collector
+# (sidecar / agent / gateway) and configure the exporters your backend needs.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Batch spans and metrics before export, the Collector-side batching that
+  # keeps the app cheap (the app does not batch beyond the SDK's own queue).
+  batch: {}
+
+exporters:
+  # Prints received telemetry to the Collector's stdout for local inspection.
+  debug:
+    verbosity: detailed
+  # Re-exposes metrics in Prometheus text format on :8889/metrics for scraping.
+  # OTel dot-named instruments are translated to Prometheus names here (for
+  # example api.errors becomes api_errors_total).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, prometheus]

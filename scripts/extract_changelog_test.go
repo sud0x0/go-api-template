@@ -122,3 +122,52 @@ func TestExtract_UsageError(t *testing.T) {
 		t.Errorf("expected exit 2 with no args, got %d", code)
 	}
 }
+
+// TestExtract_HeadingOnlyBody covers the hardened emptiness rule: a section
+// whose body is only seeded `###` group headings counts as empty. Without the
+// flag it is rejected (exit 1); with --allow-empty the emptiness rejection is
+// skipped (exit 0). [3.0.0] in the fixture is heading-only.
+func TestExtract_HeadingOnlyBody(t *testing.T) {
+	if _, _, code := runScript(t, "3.0.0", fixture); code != 1 {
+		t.Errorf("heading-only without flag: expected exit 1, got %d", code)
+	}
+	if _, _, code := runScript(t, "--allow-empty", "3.0.0", fixture); code != 0 {
+		t.Errorf("heading-only with --allow-empty: expected exit 0, got %d", code)
+	}
+}
+
+// TestExtract_CommentOnlyBody covers the hardened emptiness rule for HTML
+// comments: a body that is only a multi-line comment counts as empty and is
+// rejected without the flag. [3.0.1] in the fixture is a multi-line-comment-only
+// section.
+func TestExtract_CommentOnlyBody(t *testing.T) {
+	_, stderr, code := runScript(t, "3.0.1", fixture)
+	if code != 1 {
+		t.Errorf("comment-only without flag: expected exit 1, got %d", code)
+	}
+	if !strings.Contains(stderr, "no content") {
+		t.Errorf("error should say 'no content', got: %s", stderr)
+	}
+}
+
+// TestExtract_MixedBodyHasContent verifies that headings plus a comment plus one
+// real bullet counts as content: exit 0, and the bullet is printed. The
+// emptiness rule governs only the decision, not what is printed, so the headings
+// and comment still appear in the verbatim output. [3.0.2] is the mixed section.
+func TestExtract_MixedBodyHasContent(t *testing.T) {
+	stdout, stderr, code := runScript(t, "3.0.2", fixture)
+	if code != 0 {
+		t.Fatalf("mixed body: expected exit 0, got %d, stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "- a real bullet") {
+		t.Errorf("expected the real bullet in output, got:\n%s", stdout)
+	}
+}
+
+// TestExtract_AllowEmptyStillFailsOnMissingSection verifies --allow-empty only
+// relaxes the emptiness check: a genuinely missing section still exits 1.
+func TestExtract_AllowEmptyStillFailsOnMissingSection(t *testing.T) {
+	if _, _, code := runScript(t, "--allow-empty", "99.0.0", fixture); code != 1 {
+		t.Errorf("missing section with --allow-empty: expected exit 1, got %d", code)
+	}
+}

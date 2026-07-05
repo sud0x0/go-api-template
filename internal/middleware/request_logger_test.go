@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
 )
@@ -142,6 +144,60 @@ func TestRequestLogger_RequestCompletedDoesNotRepeatBoundAttrs(t *testing.T) {
 		if !wantKeys[key] {
 			t.Errorf("unexpected key %q in 'request completed' line — should be bound on the logger, not repeated as an arg", key)
 		}
+	}
+}
+
+// TestRequestLogger_BindsTraceAndSpanIDsFromActiveSpan verifies that when the
+// request context carries a valid OTel span, the middleware binds trace_id and
+// span_id matching that span onto the request-scoped logger.
+func TestRequestLogger_BindsTraceAndSpanIDsFromActiveSpan(t *testing.T) {
+	cap := &captureLogger{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RequestLogger(cap)(next)
+
+	// A real SDK tracer produces a sampled, valid span context (mirrors what
+	// otelhttp puts on the context in production).
+	tp := sdktrace.NewTracerProvider()
+	t.Cleanup(func() { _ = tp.Shutdown(context.Background()) })
+	ctx, span := tp.Tracer("test").Start(context.Background(), "op")
+	defer span.End()
+	sc := span.SpanContext()
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil).WithContext(ctx)
+	mw.ServeHTTP(httptest.NewRecorder(), req)
+
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if got := cap.boundCtx.TraceID; got != sc.TraceID().String() {
+		t.Errorf("TraceID: got %q, want %q", got, sc.TraceID().String())
+	}
+	if got := cap.boundCtx.SpanID; got != sc.SpanID().String() {
+		t.Errorf("SpanID: got %q, want %q", got, sc.SpanID().String())
+	}
+}
+
+// TestRequestLogger_NoSpanLeavesTraceIDsEmpty verifies that with no span on the
+// context (telemetry disabled, or a non-instrumented path) neither trace_id nor
+// span_id is bound, so a zero ID never appears in the output.
+func TestRequestLogger_NoSpanLeavesTraceIDsEmpty(t *testing.T) {
+	cap := &captureLogger{}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := RequestLogger(cap)(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	mw.ServeHTTP(httptest.NewRecorder(), req)
+
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if cap.boundCtx.TraceID != "" {
+		t.Errorf("TraceID should be empty with no span, got %q", cap.boundCtx.TraceID)
+	}
+	if cap.boundCtx.SpanID != "" {
+		t.Errorf("SpanID should be empty with no span, got %q", cap.boundCtx.SpanID)
 	}
 }
 

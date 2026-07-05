@@ -6,6 +6,7 @@ import (
 	"time"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
 )
@@ -23,14 +24,32 @@ import (
 //
 // RealIP MUST run before this middleware so r.RemoteAddr is the
 // resolved client IP, not the upstream proxy. See cmd/api/main.go.
+//
+// It also reads the active OTel span from the request context and binds
+// trace_id/span_id onto the logger, so every log line in the request correlates
+// to its trace. The span is created by otelhttp, which wraps outside chi, so it
+// is already on the context here. This is the whole log-correlation surface: the
+// bound fields cover every request-path log without widening the Logger
+// interface with a ctx parameter.
 func RequestLogger(log logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Only bind trace_id/span_id when the span context is valid. With
+			// telemetry disabled the span is a no-op and IDs are all-zero, which
+			// must not appear in the output.
+			var traceID, spanID string
+			if sc := trace.SpanContextFromContext(r.Context()); sc.IsValid() {
+				traceID = sc.TraceID().String()
+				spanID = sc.SpanID().String()
+			}
+
 			reqLogger := log.WithRequestContext(logger.RequestContext{
 				RequestID: chimw.GetReqID(r.Context()),
 				Method:    r.Method,
 				Path:      r.URL.Path,
 				RemoteIP:  r.RemoteAddr,
+				TraceID:   traceID,
+				SpanID:    spanID,
 			})
 			ctx := context.WithValue(r.Context(), logger.LoggerContextKey, reqLogger)
 

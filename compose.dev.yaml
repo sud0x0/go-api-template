@@ -53,9 +53,31 @@ services:
       - .env
     environment:
       TZ: ${TZ:-Australia/Melbourne}
+      # Point the app at the Collector so `make run` yields a working pipeline
+      # with no extra steps, even if .env predates the OTEL_* variables. A value
+      # in .env (loaded by compose for interpolation) still wins via the :-
+      # default. Environment overrides the env_file passthrough either way.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
     depends_on:
       db:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  # OpenTelemetry Collector: receives OTLP from the app, batches, exports to a
+  # debug logger, and re-exposes Prometheus on :8889 for local scraping. See
+  # deploy/otel-collector-config.yaml. Runs as a SEPARATE process (never inside
+  # the app image), mirroring the sidecar/agent/gateway deployment model.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.155.0
+    container_name: app_otel_collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:Z
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver (the app exports here)
+      - "8889:8889" # Prometheus exporter, scrape metrics at localhost:8889/metrics
 
 volumes:
   postgres_data:

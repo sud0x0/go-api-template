@@ -46,10 +46,10 @@ Nothing per-request that should be per-process:
 
 The instrumentation already exists; name the signal and how to read it locally:
 
-- `http_request_duration_seconds` (histogram, by method/path/status) — endpoint latency.
-- `db_query_duration_seconds` (by operation) — query cost from the app's side.
-- `db_pool_*` (from the pool collector) — saturation: in-use vs idle vs total.
-- Read them at `curl -s localhost:9090/metrics | grep <name>` on the running stack.
+- `http_server_request_duration_*` (histogram, by method/route/status) for endpoint latency.
+- `db_client_operation_duration_*` (by operation) for query cost from the app's side.
+- `db_pool_*` (from the pool-stats async callback) for saturation: in-use vs idle vs total.
+- The app pushes these via OTLP to the Collector, which re-exposes Prometheus. Read them off the Collector's scrape port on the running stack: `curl -s localhost:8889/metrics | grep <name>`. OTel dot names become underscores, so a counter like `api.errors` becomes `api_errors_total`.
 - **Optional quick load probe:** if `hey` or `bombardier` is already installed, a short run gives a latency distribution (`hey -z 10s -c 20 http://localhost:8080/api/v1/logs`). **Never add them as project dependencies** — they're ad-hoc local tools only.
 
 ## Output format

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,8 +23,6 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
 	"github.com/pashagolub/pgxmock/v4"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/sud0x0/go-api-template/internal/shared"
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
@@ -41,23 +40,28 @@ func (m *mockLogger) LogInfo(message string, args ...any)                      {
 func (m *mockLogger) LogDebug(message string, args ...any)                     {}
 func (m *mockLogger) WithRequestContext(_ logger.RequestContext) logger.Logger { return m }
 
-// testHandlerMetrics implements HandlerMetrics with a private CounterVec
-// so tests can read back the recorded errors without touching the global
-// Prometheus registry.
+// testHandlerMetrics implements HandlerMetrics with an in-memory count keyed by
+// (feature, error_type) so tests can read back recorded errors without any
+// telemetry backend. Concurrency-safe so it survives -race.
 type testHandlerMetrics struct {
-	cv *prometheus.CounterVec
+	mu     sync.Mutex
+	counts map[[2]string]float64
 }
 
 func (m *testHandlerMetrics) IncAPIError(feature, errorType string) {
-	m.cv.WithLabelValues(feature, errorType).Inc()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counts[[2]string{feature, errorType}]++
 }
 
-func newTestHandlerMetrics() (*testHandlerMetrics, *prometheus.CounterVec) {
-	cv := prometheus.NewCounterVec(
-		prometheus.CounterOpts{Name: "test_api_errors_total", Help: "test"},
-		[]string{"feature", "error_type"},
-	)
-	return &testHandlerMetrics{cv: cv}, cv
+func (m *testHandlerMetrics) count(feature, errorType string) float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.counts[[2]string{feature, errorType}]
+}
+
+func newTestHandlerMetrics() *testHandlerMetrics {
+	return &testHandlerMetrics{counts: map[[2]string]float64{}}
 }
 
 // mockTxRunner adapts a pgxmock pool to the service's txRunner interface,
@@ -79,7 +83,7 @@ func (m *mockTxRunner) WithTransaction(ctx context.Context, fn func(tx pgx.Tx) e
 	return tx.Commit(ctx)
 }
 
-func setupTestStack(t *testing.T) (*Handler, pgxmock.PgxPoolIface, *prometheus.CounterVec, func()) {
+func setupTestStack(t *testing.T) (*Handler, pgxmock.PgxPoolIface, *testHandlerMetrics, func()) {
 	t.Helper()
 	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(pgxmock.QueryMatcherRegexp))
 	if err != nil {
@@ -87,22 +91,23 @@ func setupTestStack(t *testing.T) (*Handler, pgxmock.PgxPoolIface, *prometheus.C
 	}
 
 	log := &mockLogger{}
-	m, cv := newTestHandlerMetrics()
+	m := newTestHandlerMetrics()
 	repo := NewLogRepository(mock)
 	service := NewLogService(repo, &mockTxRunner{pool: mock})
 	handler := NewLogHandler(service, log, m)
 
-	return handler, mock, cv, func() { mock.Close() }
+	return handler, mock, m, func() { mock.Close() }
 }
 
-// assertErrorRecorded verifies api_errors_total{feature="log",error_type=errType}
-// equals want. Used by every error-path subtest to enforce the spec rule that
-// errors must be counted with the right bounded label.
-func assertErrorRecorded(t *testing.T, cv *prometheus.CounterVec, errType string, want float64) {
+// assertErrorRecorded verifies the api.errors count for
+// {feature="log",error_type=errType} equals want. Used by every error-path
+// subtest to enforce the spec rule that errors must be counted with the right
+// bounded label.
+func assertErrorRecorded(t *testing.T, m *testHandlerMetrics, errType string, want float64) {
 	t.Helper()
-	got := testutil.ToFloat64(cv.WithLabelValues(FeatureName, errType))
+	got := m.count(FeatureName, errType)
 	if got != want {
-		t.Errorf("api_errors_total{feature=%q,error_type=%q}: got %v want %v",
+		t.Errorf("api.errors{feature=%q,error_type=%q}: got %v want %v",
 			FeatureName, errType, got, want)
 	}
 }

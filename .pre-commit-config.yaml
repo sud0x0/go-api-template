@@ -2,15 +2,15 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
-      # asvs-5.0.0.txt is a verbatim `pdftotext -layout` extraction of the ASVS
-      # PDF; it carries page-break form-feed bytes and no final newline. Exclude
-      # it from the whitespace-rewriting hooks so they don't mutate a generated,
-      # licensed artifact (it stays reproducible from a fresh extraction).
-      # gitleaks and check-added-large-files still scan it.
+      # asvs-5.0.0.txt is a plain-text rendering of the committed official ASVS
+      # CSV. Exclude BOTH the txt and the CSV from the whitespace-rewriting hooks
+      # so they cannot mutate these generated, licensed artifacts, which must stay
+      # byte-reproducible from a fresh download. gitleaks and
+      # check-added-large-files still scan both.
       - id: trailing-whitespace
-        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
+        exclude: '^\.claude/skills/security-review/references/(asvs-5\.0\.0\.txt|OWASP_Application_Security_Verification_Standard_5\.0\.0_en\.csv)$'
       - id: end-of-file-fixer
-        exclude: '^\.claude/skills/security-review/references/asvs-5\.0\.0\.txt$'
+        exclude: '^\.claude/skills/security-review/references/(asvs-5\.0\.0\.txt|OWASP_Application_Security_Verification_Standard_5\.0\.0_en\.csv)$'
       - id: check-yaml
       - id: check-added-large-files
       - id: check-merge-conflict

@@ -146,3 +146,13 @@ jobs:
       # fails on PR before tag time.
       - name: extract-changelog tests
         run: go test ./scripts/...
+
+      # Assert only that the `## [Unreleased]` section EXISTS and parses, NOT
+      # that it is non-empty. Right after a release cut the section is
+      # legitimately empty (it is empty now, deliberately), so `--allow-empty`
+      # skips the emptiness rejection here. Non-emptiness is enforced only on the
+      # release path (release.yml and `make changelog-check`, both flagless),
+      # where a real tag extracts `## [X.Y.Z]` and an empty section must abort
+      # the tag.
+      - name: Unreleased section is extractable
+        run: sh ./scripts/extract-changelog.sh --allow-empty Unreleased CHANGELOG.md > /dev/null

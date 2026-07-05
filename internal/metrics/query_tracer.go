@@ -7,7 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // queryTracerCtxKey carries the per-query start time and operation label
@@ -23,11 +24,11 @@ type queryCtxValue struct {
 
 // QueryTracer implements pgx.QueryTracer to record query duration and
 // errors. Wire it into the pool via pgxpool.Config.ConnConfig.Tracer.
-// Concurrency-safe: no mutable fields besides the pre-allocated metrics
-// vectors.
+// Concurrency-safe: no mutable fields besides the OTel instruments, which are
+// themselves safe for concurrent use.
 type QueryTracer struct {
-	duration *prometheus.HistogramVec
-	errors   *prometheus.CounterVec
+	duration metric.Float64Histogram
+	errors   metric.Int64Counter
 }
 
 // TraceQueryStart records the start time and the operation label on the
@@ -49,9 +50,10 @@ func (t *QueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.T
 		// (e.g. ctx was replaced upstream); nothing to record.
 		return
 	}
-	t.duration.WithLabelValues(v.op).Observe(time.Since(v.start).Seconds())
+	attrs := metric.WithAttributes(attribute.String(attrDBOperation, v.op))
+	t.duration.Record(ctx, time.Since(v.start).Seconds(), attrs)
 	if data.Err != nil && !errors.Is(data.Err, pgx.ErrNoRows) {
-		t.errors.WithLabelValues(v.op).Inc()
+		t.errors.Add(ctx, 1, attrs)
 	}
 }
 

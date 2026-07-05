@@ -31,10 +31,11 @@ func ResolvePort() string {
 // Config holds all application configuration loaded from environment variables.
 // Load this once at startup and pass it explicitly to components that need it.
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Log      LogConfig
-	CORS     CORSConfig
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Log           LogConfig
+	CORS          CORSConfig
+	Observability ObservabilityConfig
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -88,6 +89,29 @@ type LogConfig struct {
 type CORSConfig struct {
 	AllowedOrigins   []string
 	AllowCredentials bool
+}
+
+// ObservabilityConfig holds OpenTelemetry (OTel) export settings. Traces and
+// metrics are pushed over OTLP to a local Collector, which batches them and
+// re-exposes Prometheus for scraping (see the README "Observability" section).
+// Logs are NOT covered here: they stay on stdlib slog JSON to stdout.
+type ObservabilityConfig struct {
+	// OTELEnabled gates all OTel wiring. When false the app installs no-op
+	// tracer/meter providers and boots with telemetry disabled (logged once at
+	// startup), so a template with no Collector still runs. When OTEL_ENABLED is
+	// unset it defaults to "an endpoint is configured", so setting the endpoint
+	// is enough to turn telemetry on with no second flag to remember.
+	OTELEnabled bool
+	// OTELExporterEndpoint is the OTLP Collector endpoint from
+	// OTEL_EXPORTER_OTLP_ENDPOINT (e.g. http://otel-collector:4318 for the HTTP
+	// exporter this template uses). Empty disables telemetry. No localhost
+	// default is baked in here: an unset endpoint means "disabled", never
+	// "silently push somewhere wrong".
+	OTELExporterEndpoint string
+	// OTELServiceName is the service.name resource attribute from
+	// OTEL_SERVICE_NAME. Defaults to "go-api" to match the logger's service
+	// attribute, so a log line and its trace share one service identity.
+	OTELServiceName string
 }
 
 // LoadDatabase reads the DB_* environment variables and returns a validated
@@ -252,6 +276,18 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// OTel: an unset OTEL_EXPORTER_OTLP_ENDPOINT means telemetry is disabled
+	// rather than pointed at a guessed localhost. OTEL_ENABLED, when unset,
+	// defaults to "an endpoint is configured" so a single variable turns the
+	// pipeline on. Set it explicitly to false to force-disable even with an
+	// endpoint present, or true to fail fast (in validate) if the endpoint is
+	// missing.
+	otelEndpoint := getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+	otelEnabled, err := getEnvBool("OTEL_ENABLED", otelEndpoint != "")
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:              getEnv("PORT", DefaultPort),
@@ -275,6 +311,11 @@ func Load() (*Config, error) {
 		CORS: CORSConfig{
 			AllowedOrigins:   parseOrigins(getEnv("CORS_ALLOWED_ORIGINS", "")),
 			AllowCredentials: allowCreds,
+		},
+		Observability: ObservabilityConfig{
+			OTELEnabled:          otelEnabled,
+			OTELExporterEndpoint: otelEndpoint,
+			OTELServiceName:      getEnv("OTEL_SERVICE_NAME", "go-api"),
 		},
 	}
 
@@ -321,6 +362,17 @@ func (c *Config) validate() error {
 		return fmt.Errorf(
 			"CORS_ALLOW_CREDENTIALS=true requires a non-empty CORS_ALLOWED_ORIGINS — " +
 				"credentialed CORS with no allowed origins can never succeed",
+		)
+	}
+
+	// Enabling telemetry without an endpoint would build an exporter with
+	// nowhere to send to. Fail fast naming the variable rather than boot into a
+	// broken pipeline. An unset OTEL_ENABLED cannot reach here (it defaults to
+	// endpoint-present), so this only fires on an explicit OTEL_ENABLED=true.
+	if c.Observability.OTELEnabled && c.Observability.OTELExporterEndpoint == "" {
+		return fmt.Errorf(
+			"OTEL_ENABLED=true requires OTEL_EXPORTER_OTLP_ENDPOINT to be set " +
+				"(the OTLP Collector endpoint, e.g. http://otel-collector:4318)",
 		)
 	}
 

@@ -1,8 +1,10 @@
 # ASVS 5.0.0 applicability map — go-api-template
 
 **Verification bar: Level 2** (all L1 requirements are included by definition; L3-only
-requirements are out of scope). Standard: **OWASP ASVS 5.0.0** (title page: *Version 5.0.0,
-May 2025*), committed under [`references/`](.) as the PDF and `asvs-5.0.0.txt`.
+requirements are out of scope). Standard: **OWASP ASVS 5.0.0** (*Version 5.0.0, May 2025*).
+The official machine-readable CSV (`OWASP_Application_Security_Verification_Standard_5.0.0_en.csv`)
+is committed under [`references/`](.) as the upstream source, with
+[`asvs-5.0.0.txt`](asvs-5.0.0.txt) as its greppable plain-text rendering.
 
 > Contains material from the OWASP Application Security Verification Standard 5.0.0,
 > © 2008–2025 The OWASP Foundation, licensed CC BY-SA 4.0
@@ -155,7 +157,7 @@ correct deployment, not enforced by the app.
 | 12.2.2 | External-facing services use publicly trusted certs | 1 | partial | Certificate provisioning is an infra concern (edge) | — |
 | 12.3.1 | TLS on all inbound/outbound connections (DB, tools, APIs) | 2 | partial | Outbound uses Go stdlib client with default cert validation (`internal/httpclient/httpclient.go`); inbound TLS + DB `sslmode` are connection-string/edge driven (`internal/db/db.go`) | — |
 | 12.3.2 | TLS clients validate received certificates | 2 | partial | `httpclient` uses net/http default transport (validates by default); DB cert validation depends on `sslmode` in the DSN, not code-enforced | — |
-| 12.3.3 | TLS between internal HTTP services, no insecure fallback | 2 | partial | TLS terminated at edge/mesh; internal admin `:METRICS_PORT` is plain HTTP restricted at infra (`decisions.md` #5) | — |
+| 12.3.3 | TLS between internal HTTP services, no insecure fallback | 2 | partial | TLS terminated at edge/mesh; internal admin `:METRICS_PORT` is plain HTTP restricted at infra (`decisions.md` #5). OTLP telemetry export to the Collector is plain HTTP in dev and expected to run over a trusted network or mesh mTLS in production (`decisions.md` #15) | — |
 | 12.3.4 | Internal TLS uses trusted / pinned internal CAs | 2 | n/a | No in-app internal TLS trust store; an infra-layer concern (`decisions.md` #5) | — |
 
 ## V13 Configuration
@@ -174,7 +176,7 @@ correct deployment, not enforced by the app.
 | 13.4.2 | Debug modes disabled in production | 2 | met-untested | Default `LOG_LEVEL=production` (fail-safe); no pprof/expvar/debug endpoints (`internal/config/config.go`, `cmd/api/main.go`) | **none (untested)** |
 | 13.4.3 | No directory listings served | 2 | met-untested | JSON API only; no static file server mounted (`cmd/api/main.go`) | **none (untested)** |
 | 13.4.4 | HTTP TRACE unsupported in production | 2 | met | chi registers no TRACE handler; unrouted methods return the JSON `method_not_allowed` envelope (`cmd/api/main.go`, `internal/shared`) | `TestPublicRouter_MethodNotAllowedEnvelope` |
-| 13.4.5 | Docs/monitoring endpoints not exposed unless intended | 2 | met-untested | `/metrics` bound only to the internal admin `:METRICS_PORT` (`cmd/api/main.go`, `decisions.md` #5) | **none (untested)** |
+| 13.4.5 | Docs/monitoring endpoints not exposed unless intended | 2 | met-untested | The app serves NO metrics scrape endpoint: metrics leave via OTLP push to the Collector, so there is no `/metrics` on either listener. The internal admin `:METRICS_PORT` serves only the mirrored health probes, restricted at infra (`cmd/api/main.go`, `decisions.md` #5, #15) | **none (untested)** |
 
 ## V14 Data Protection
 
@@ -265,7 +267,7 @@ is a candidate for a targeted test or an explicit accept-the-risk decision.
 | 13.4.1 | V13 | No filesystem / `.git` served — no test. |
 | 13.4.2 | V13 | Debug modes off (`LOG_LEVEL=production`, no pprof/expvar) — no test asserts no debug endpoint is registered. |
 | 13.4.3 | V13 | No directory listings — no test. |
-| 13.4.5 | V13 | `/metrics` bound only to the internal listener — no test asserts it is absent from the public listener. |
+| 13.4.5 | V13 | App serves no metrics scrape endpoint (metrics push via OTLP). No test asserts `/metrics` is absent from both listeners. |
 | 14.2.3 | V14 | No data sent to third-party trackers (no such integration) — nothing to test. |
 | 15.1.2 | V15 | SBOM is produced by the GoReleaser pipeline, not a Go test. |
 | 15.2.3 | V15 | Prod build excludes test/sample code (`make deadcode` is a target, not a `go test`). |

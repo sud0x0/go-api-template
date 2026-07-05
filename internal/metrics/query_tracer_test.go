@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
 // TestExtractOperation covers the bounded-cardinality rules: known SQL
@@ -53,42 +53,49 @@ func TestExtractOperation(t *testing.T) {
 	}
 }
 
-func newTracerForTest() (*QueryTracer, *prometheus.HistogramVec, *prometheus.CounterVec) {
-	d := prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{Name: "query_duration_seconds_test", Help: "x"},
-		[]string{"operation"},
-	)
-	e := prometheus.NewCounterVec(
-		prometheus.CounterOpts{Name: "query_errors_total_test", Help: "x"},
-		[]string{"operation"},
-	)
-	return &QueryTracer{duration: d, errors: e}, d, e
+// newTracerForTest returns a QueryTracer backed by a ManualReader so tests can
+// collect and assert on the db.client.* instruments.
+func newTracerForTest(t *testing.T) (*QueryTracer, *sdkmetric.ManualReader) {
+	t.Helper()
+	m, reader := newForTest(t)
+	tracer, ok := m.QueryTracer().(*QueryTracer)
+	if !ok {
+		t.Fatalf("QueryTracer() returned %T, want *QueryTracer", m.QueryTracer())
+	}
+	return tracer, reader
 }
 
 // TestQueryTracer_NoRowsNotCountedAsError verifies the explicit carve-out:
 // pgx.ErrNoRows is a normal QueryRow outcome, not a database error.
 func TestQueryTracer_NoRowsNotCountedAsError(t *testing.T) {
-	tracer, _, errCV := newTracerForTest()
+	tracer, reader := newTracerForTest(t)
 
 	ctx := tracer.TraceQueryStart(context.Background(), nil,
 		pgx.TraceQueryStartData{SQL: "SELECT * FROM x WHERE id = $1"})
 	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{Err: pgx.ErrNoRows})
 
-	if v := testutil.ToFloat64(errCV.WithLabelValues("SELECT")); v != 0 {
-		t.Errorf("ErrNoRows should not increment error counter, got %v", v)
+	rm := collect(t, reader)
+	// No error data point should exist at all for a no-rows result.
+	if metricExists(rm, metricQueryErrors) {
+		if v := sumInt64(t, rm, metricQueryErrors,
+			attribute.String(attrDBOperation, "SELECT")); v != 0 {
+			t.Errorf("ErrNoRows should not increment error counter, got %v", v)
+		}
 	}
 }
 
 // TestQueryTracer_RealErrorCounted verifies that a non-no-rows error
 // increments the error counter labelled with the operation keyword.
 func TestQueryTracer_RealErrorCounted(t *testing.T) {
-	tracer, _, errCV := newTracerForTest()
+	tracer, reader := newTracerForTest(t)
 
 	ctx := tracer.TraceQueryStart(context.Background(), nil,
 		pgx.TraceQueryStartData{SQL: "INSERT INTO x VALUES ($1)"})
 	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{Err: errors.New("connection reset")})
 
-	if v := testutil.ToFloat64(errCV.WithLabelValues("INSERT")); v != 1 {
+	rm := collect(t, reader)
+	if v := sumInt64(t, rm, metricQueryErrors,
+		attribute.String(attrDBOperation, "INSERT")); v != 1 {
 		t.Errorf("expected 1 INSERT error, got %v", v)
 	}
 }
@@ -96,13 +103,15 @@ func TestQueryTracer_RealErrorCounted(t *testing.T) {
 // TestQueryTracer_DurationRecorded verifies the duration histogram is
 // observed even on a successful query.
 func TestQueryTracer_DurationRecorded(t *testing.T) {
-	tracer, durCV, _ := newTracerForTest()
+	tracer, reader := newTracerForTest(t)
 
 	ctx := tracer.TraceQueryStart(context.Background(), nil,
 		pgx.TraceQueryStartData{SQL: "SELECT 1"})
 	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{})
 
-	if got := testutil.CollectAndCount(durCV); got != 1 {
+	rm := collect(t, reader)
+	if got := histogramCount(t, rm, metricQueryDuration,
+		attribute.String(attrDBOperation, "SELECT")); got != 1 {
 		t.Errorf("expected 1 observation in duration histogram, got %d", got)
 	}
 }
@@ -111,7 +120,7 @@ func TestQueryTracer_DurationRecorded(t *testing.T) {
 // without a corresponding TraceQueryStart does not panic (defensive
 // behaviour for unusual contexts).
 func TestQueryTracer_NoCtxValueIsSafe(t *testing.T) {
-	tracer, _, _ := newTracerForTest()
+	tracer, _ := newTracerForTest(t)
 	// Should be a no-op, not a panic.
 	tracer.TraceQueryEnd(context.Background(), nil, pgx.TraceQueryEndData{Err: errors.New("x")})
 }

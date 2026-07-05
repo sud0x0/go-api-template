@@ -1,6 +1,8 @@
 # Go API Template
 
-A production-ready template for building REST APIs in Go, backed by PostgreSQL. Fork it, rename it, and add your features — the security, testing, and release tooling is already wired.
+> Please note that this project is still under development.
+
+A template for building REST APIs in Go, backed by PostgreSQL. Fork it, rename it, and add your features — the security, testing, and release tooling is already wired.
 
 ## Who it's for
 
@@ -89,7 +91,7 @@ Every route is protected by default, so a business call returns `401` until you 
 curl http://localhost:8080/api/v1/logs   # {"error":"unauthorised", ...}
 ```
 
-The app opens two ports. Port `8080` serves the API and its health checks. Port `9090` serves internal metrics for Prometheus (a monitoring tool). It has no login, so keep it off the public internet — use a firewall or a private network.
+The app opens two ports. Port `8080` serves the API and its health checks. Port `9090` is an internal admin port that mirrors the health checks. It has no login, so keep it off the public internet by using a firewall or a private network. The app serves no metrics scrape endpoint. It pushes metrics and traces to an OpenTelemetry Collector instead (see [Observability](#observability)).
 
 Forking this for your own project? Do the module rename first — see [Forking the template](#forking-the-template).
 
@@ -340,55 +342,70 @@ MIGRATOR_ALLOW_DESTRUCTIVE=true go-api-migrator --confirm-destructive down
 
 ## Observability
 
+The model is OpenTelemetry (OTel) with one deliberate split:
+
+- **Logs** are stdlib `log/slog` JSON to stdout. Transport is unchanged. The OTel Go logs SDK is still beta, so logs stay on slog rather than move in-process. A log line correlates to a trace by carrying `trace_id` and `span_id` (see [Logs](#logs)).
+- **Traces and metrics** are exported over OTLP to a local [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/). The Collector batches them and re-exposes Prometheus for scraping.
+
+Why this shape: the app stays cheap. It does no in-process batching beyond the SDK queue and serves no scrape endpoint. There is one operational model for both signals, and it is vendor-neutral because the Collector is the only place a backend is chosen. Prometheus survives only at the Collector edge, not inside the app.
+
+When `OTEL_EXPORTER_OTLP_ENDPOINT` is unset, telemetry is disabled: the app installs no-op providers, boots and serves normally, and logs one line saying so. Set the endpoint (compose.dev.yaml already points it at the bundled Collector) to turn the pipeline on.
+
 ### Metrics
 
-`/metrics` is served on the internal admin port (`:METRICS_PORT`, default 9090). The middleware records scrapes too — there is no recursion, the increment lands on the next scrape's snapshot.
+Metrics are pushed to the Collector over OTLP. The app no longer serves `/metrics`. To read metrics locally, scrape the Collector's Prometheus exporter at `localhost:8889/metrics`.
 
-The HTTP middleware is **panic-safe**: if a handler panics, a single deferred block still records the request (status `500` if no status was written, else the written status), restores the in-flight gauge, and re-panics so `chi.Recoverer` upstream still produces the 500 response.
+Instrument names follow OTel semantic conventions (semconv) where one exists. The Collector's Prometheus exporter lower-snakes the dotted names and adds unit and `_total` suffixes, so `http.server.request.duration` is scraped as `http_server_request_duration_seconds` and `api.errors` as `api_errors_total`. The tables below list the OTel instrument names.
+
+The HTTP middleware is **panic-safe**: if a handler panics, a single deferred block still records the request (status `500` if no status was written, else the written status), restores the in-flight counter, and re-panics so `chi.Recoverer` upstream still produces the 500 response.
 
 #### HTTP
 
-| Metric                          | Type      | Labels               |
-| ------------------------------- | --------- | -------------------- |
-| `http_requests_total`           | Counter   | method, path, status |
-| `http_request_duration_seconds` | Histogram | method, path, status |
-| `http_requests_in_flight`       | Gauge     | —                    |
-| `http_response_size_bytes`      | Histogram | method, path, status |
+| Instrument (OTel name)           | semconv? | Type              | Attributes                                                 |
+| -------------------------------- | -------- | ----------------- | ---------------------------------------------------------- |
+| `http.server.request.count`      | no       | Counter           | http.request.method, http.route, http.response.status_code |
+| `http.server.request.duration`   | yes      | Histogram (s)     | http.request.method, http.route, http.response.status_code |
+| `http.server.active_requests`    | yes      | UpDownCounter     | http.request.method                                        |
+| `http.server.response.body.size` | yes      | Histogram (bytes) | http.request.method, http.route, http.response.status_code |
 
-`path` is the chi matched route pattern (`/logs/{id}`) for matched routes or the literal `unmatched` for 404s — bounded cardinality regardless of URL shape.
+`http.route` is the chi matched route pattern (`/logs/{id}`) for matched routes or the literal `unmatched` for 404s. Cardinality stays bounded regardless of URL shape.
 
 #### Database pool
 
-Reported by a custom `prometheus.Collector` that reads `pool.Stat()` on every scrape (no background polling).
+Reported by an async OTel callback that reads `pool.Stat()` once at each metric collection (no background polling), preserving the original read-at-collection design.
 
-| Metric                                                                                     | Type    |
-| ------------------------------------------------------------------------------------------ | ------- |
-| `db_pool_acquired_conns`, `db_pool_idle_conns`, `db_pool_total_conns`, `db_pool_max_conns` | Gauge   |
-| `db_pool_acquire_count_total`, `db_pool_acquire_duration_seconds_total`                    | Counter |
-| `db_pool_empty_acquire_count_total`, `db_pool_canceled_acquire_count_total`                | Counter |
+| Instrument                                                                                 | Type               |
+| ------------------------------------------------------------------------------------------ | ------------------ |
+| `db.pool.acquired_conns`, `db.pool.idle_conns`, `db.pool.total_conns`, `db.pool.max_conns` | Observable gauge   |
+| `db.pool.acquire_count`, `db.pool.acquire_duration_seconds`                                | Observable counter |
+| `db.pool.empty_acquire_count`, `db.pool.canceled_acquire_count`                            | Observable counter |
 
 #### Database queries
 
 Reported by a `pgx.QueryTracer` wired into the pool's `ConnConfig.Tracer`. Every query is instrumented automatically.
 
-| Metric                      | Type      | Labels    |
-| --------------------------- | --------- | --------- |
-| `db_query_duration_seconds` | Histogram | operation |
-| `db_query_errors_total`     | Counter   | operation |
+| Instrument                     | semconv? | Type          | Attribute         |
+| ------------------------------ | -------- | ------------- | ----------------- |
+| `db.client.operation.duration` | yes      | Histogram (s) | db.operation.name |
+| `db.client.operation.errors`   | no       | Counter       | db.operation.name |
 
-`operation` is bounded to `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `BEGIN`, `COMMIT`, `ROLLBACK`; anything else maps to `OTHER`. `pgx.ErrNoRows` is excluded from the error counter (it's a normal `QueryRow` outcome, not a database error).
+`db.operation.name` is bounded to `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `BEGIN`, `COMMIT`, `ROLLBACK`, `WITH`. Anything else maps to `OTHER`. `pgx.ErrNoRows` is excluded from the error counter because it is a normal `QueryRow` outcome, not a database error.
 
 #### API errors
 
-| Metric             | Type    | Labels              |
-| ------------------ | ------- | ------------------- |
-| `api_errors_total` | Counter | feature, error_type |
+| Instrument   | Type    | Attributes          |
+| ------------ | ------- | ------------------- |
+| `api.errors` | Counter | feature, error_type |
 
-Both labels come from package-level Go constants (`FeatureName` and the `ErrType*` constants in each feature's `errors.go`). `err.Error()` text is **never** used as a label value.
+Both attributes come from package-level Go constants (`FeatureName` and the `ErrType*` constants in each feature's `errors.go`). `err.Error()` text is **never** used as an attribute value.
+
+### Traces
+
+Each inbound request gets a server span from `otelhttp`, which wraps the public router outside chi so the chi middleware order is untouched. The span is exported over OTLP with the metrics. Because the span is on the request context before chi runs, the request logger can read its IDs and stamp them onto every log line (see below), and downstream instrumentation can attach to it. `otelhttp` here is configured for spans only. A no-op meter provider is passed so it does not emit its own HTTP metrics, which would collide with the ones the metrics middleware records.
 
 ### Logs
 
-Every line is JSON to stdout (no log files, no rotation in the app — the orchestrator does that). The shape is:
+Every line is JSON to stdout (no log files, no rotation in the app, the orchestrator does that). The shape is:
 
 ```json
 {
@@ -402,19 +419,22 @@ Every line is JSON to stdout (no log files, no rotation in the app — the orche
   "method": "POST",
   "path": "/api/v1/logs",
   "ip": "203.0.113.5:1234",
-  "user_id": "u-42"
+  "user_id": "u-42",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7"
 }
 ```
 
-| Field                                | Source                                                                                                                 | When present                              |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| `time`                               | slog default, formatted RFC3339                                                                                        | every line                                |
-| `level`, `msg`                       | slog default                                                                                                           | every line                                |
-| `service`, `version`, `commit`       | `NewLogger(level, serviceName)` — bound once via `WithAttrs`; version/commit come from `internal/version` (`-ldflags`) | every line                                |
-| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                    | every line emitted during an HTTP request |
-| `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                   | every line emitted _after_ auth fires     |
-| `error`, `actual_error`              | only on `LogError`                                                                                                     | error lines                               |
-| `status`, `duration_ms`              | only on the "request completed" line                                                                                   | end-of-request lines                      |
+| Field                                | Source                                                                                                                 | When present                                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `time`                               | slog default, formatted RFC3339                                                                                        | every line                                                                    |
+| `level`, `msg`                       | slog default                                                                                                           | every line                                                                    |
+| `service`, `version`, `commit`       | `NewLogger(level, serviceName)` — bound once via `WithAttrs`; version/commit come from `internal/version` (`-ldflags`) | every line                                                                    |
+| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                    | every line emitted during an HTTP request                                     |
+| `trace_id`, `span_id`                | `RequestLogger` reads the active OTel span from the request context                                                    | every line during a request with a valid span (omitted when telemetry is off) |
+| `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                   | every line emitted _after_ auth fires                                         |
+| `error`, `actual_error`              | only on `LogError`                                                                                                     | error lines                                                                   |
+| `status`, `duration_ms`              | only on the "request completed" line                                                                                   | end-of-request lines                                                          |
 
 **One log line is enough to identify the request, the route, the client, and (after auth) the user.** A handler that returns an internal error logs:
 
@@ -427,7 +447,7 @@ Every line is JSON to stdout (no log files, no rotation in the app — the orche
  "actual_error":"getLog abc: database error: pq: connection refused"}
 ```
 
-No correlation join needed — every field needed to triage the incident is on that single line.
+No correlation join needed for the request itself: every field to triage the incident is on that single line. To jump from a log line to its distributed trace, take `trace_id` and `span_id` and look them up in your tracing backend (fed by the Collector). That is the whole point of stamping them onto the line.
 
 **Wiring user_id (when you add auth):** in your auth middleware, after you've validated the token and pulled the user ID, re-wrap the request-scoped logger:
 
@@ -449,9 +469,23 @@ ctx = context.WithValue(r.Context(), logger.LoggerContextKey, log)
 
 `/readyz` and `/health` are mirrored on the internal admin port and, on the public listener, are gated by `PUBLIC_READINESS` (default `true`). The readiness result is cached for ~2s (concurrency-safe), and the cached DB ping runs on a context detached from the requesting client's cancellation — so a flood of probes collapses to at most one DB ping per window and a client aborting `/readyz` mid-ping cannot poison the shared result. Health endpoints (`/livez`, `/readyz`, `/health`) are **exempt** from the app-level rate limiter (a low `RATE_LIMIT_RPM` must never 429 liveness probes into a restart loop); they rely on the readiness cache and edge controls instead. Trade-off: exposing readiness publicly is convenient for external load-balancer health checks but discloses operational state and adds a (now-bounded) DB-ping vector — set `PUBLIC_READINESS=false` to keep it internal-only.
 
+### Configuration
+
+| Variable                      | Default  | Effect                                                                                                                                      |
+| ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | (unset)  | OTLP/HTTP Collector endpoint (for example `http://otel-collector:4318`). Unset means telemetry is disabled.                                 |
+| `OTEL_SERVICE_NAME`           | `go-api` | `service.name` resource attribute, matching the logger's `service` field.                                                                   |
+| `OTEL_ENABLED`                | derived  | When unset, defaults to "enabled if an endpoint is set". Set `false` to force-disable, or `true` to fail fast when the endpoint is missing. |
+
+With the endpoint unset the app runs with tracing and metrics as no-ops and logs one line saying telemetry is disabled. It still serves requests and health checks normally, so a fork with no Collector boots out of the box.
+
+### Deployment
+
+The Collector runs as a **separate process**, never inside the app image. Pick a [deployment pattern](https://opentelemetry.io/docs/collector/deploy/) to suit your platform: a sidecar next to each pod, a per-node agent, or a central gateway. `compose.dev.yaml` bundles one for local development (config in [`deploy/otel-collector-config.yaml`](deploy/otel-collector-config.yaml)) that receives OTLP, exports to a debug logger, and re-exposes Prometheus on `localhost:8889/metrics`. See [Deployment requirements](#deployment-requirements).
+
 ### What's NOT included
 
-Prometheus, Grafana, and alertmanager are deliberately separate concerns — the application is a metrics _producer_; the observability stack should live in a separate infrastructure repo that scrapes this app. Dashboard JSON and Prometheus rules change for different reasons than business logic.
+Prometheus, Grafana, and alertmanager are deliberately separate concerns. The app is a telemetry _producer_ that pushes OTLP to the Collector. The Collector re-exposes Prometheus at its edge, and the monitoring stack (Prometheus server, dashboards, alert rules) should live in a separate infrastructure repo. Dashboard JSON and alert rules change for different reasons than business logic.
 
 ---
 
@@ -481,10 +515,11 @@ Configured via `CORSConfig` in main.go. Origins from `CORS_ALLOWED_ORIGINS` (com
 
 ## Deployment requirements
 
-This template expects two controls to live at the **network edge** (load balancer / API gateway / WAF), not in the application:
+This template expects these controls to live **outside the application**, not in it:
 
 1. **TLS termination + HSTS.** TLS terminates outside the app; the app speaks plain HTTP behind the edge.
 2. **Rate limiting.** The edge is the **primary** rate-limit control — it sees the true client IP, holds a cluster-wide view, and can shed load before it reaches the app.
+3. **An OpenTelemetry Collector.** Traces and metrics are pushed via OTLP, so a Collector must be reachable at `OTEL_EXPORTER_OTLP_ENDPOINT`. Run it as a separate process (sidecar, per-node agent, or gateway per the [Collector deployment guide](https://opentelemetry.io/docs/collector/deploy/)), never inside the app image. If the endpoint is unset the app still runs with telemetry disabled.
 
 The app ships an **opt-in fallback limiter** (`RATE_LIMIT_RPM`, default `0` = disabled, keyed by client IP) for deployments that genuinely have no edge limiter. Two caveats make it a fallback, not a replacement:
 
@@ -598,7 +633,7 @@ internal/jobs/          # job handler functions, following the userlog layered p
 - Load config (same `config.Load()` — already reads `REDIS_URL`).
 - Create the logger (`logger.NewLogger(cfg.Log.Level, "go-api-worker")` — note the distinct service name).
 - Open the DB pool (same `db.New(...)`).
-- Initialise the Prometheus metrics (same `metrics.New()`).
+- Initialise telemetry and metrics (same `observability.Init(...)` then `metrics.New()`).
 - Start an asynq.Server (or a Redis Streams consumer loop).
 - Bind `/livez` + `/readyz` on `:METRICS_PORT` so k8s can probe it.
 - Graceful shutdown on SIGINT/SIGTERM — drain in-flight jobs before exiting.

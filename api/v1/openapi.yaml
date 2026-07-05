@@ -29,8 +29,6 @@ security:
 tags:
   - name: Health
     description: Liveness and readiness probes
-  - name: Metrics
-    description: Prometheus metrics endpoint
   - name: Log
     description: Log entry management
 
@@ -129,36 +127,9 @@ paths:
                     type: string
                     example: unhealthy
 
-  /metrics:
-    get:
-      tags:
-        - Metrics
-      summary: Prometheus metrics
-      description: |
-        Exposes application metrics in Prometheus text format for scraping.
-
-        **WARNING:** This endpoint has no authentication. In production, restrict access
-        via network policy, reverse proxy, or move to a separate internal port.
-        Exposed metrics can reveal system internals.
-
-        **Available metrics:**
-        - `http_requests_total` — Total HTTP requests by method, path, and status code
-        - `http_request_duration_seconds` — Request duration histogram
-        - `http_requests_in_flight` — Current number of requests being processed
-        - `http_response_size_bytes` — Response size histogram
-      operationId: getMetrics
-      security: []
-      responses:
-        "200":
-          description: Prometheus metrics in text format
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: |
-                  # HELP http_requests_total Total number of HTTP requests by method, path, and status code.
-                  # TYPE http_requests_total counter
-                  http_requests_total{method="GET",path="/health",status="200"} 42
+  # The application exposes no /metrics scrape endpoint. Metrics (and traces) are
+  # pushed via OTLP to an OpenTelemetry Collector, which batches them and
+  # re-exposes Prometheus for scraping. See the README "Observability" section.
 
   /api/v1/logs:
     get:

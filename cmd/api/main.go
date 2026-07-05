@@ -1,7 +1,8 @@
 // Command api is the go-api-template HTTP server entrypoint. It wires
-// configuration, database, metrics, logging, and middleware, then serves the
-// public API on :PORT and the internal admin listener (metrics and health) on
-// :METRICS_PORT. See the README "Quick start" to run it.
+// configuration, database, telemetry, logging, and middleware, then serves the
+// public API on :PORT and the internal admin listener (health only) on
+// :METRICS_PORT. Metrics and traces are pushed via OTLP to a Collector, not
+// scraped from the app. See the README "Quick start" to run it.
 package main
 
 import (
@@ -18,12 +19,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httprate"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/sud0x0/go-api-template/internal/config"
 	"github.com/sud0x0/go-api-template/internal/db"
 	"github.com/sud0x0/go-api-template/internal/metrics"
 	"github.com/sud0x0/go-api-template/internal/middleware"
+	"github.com/sud0x0/go-api-template/internal/observability"
 	"github.com/sud0x0/go-api-template/internal/shared"
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
 	"github.com/sud0x0/go-api-template/internal/userlog"
@@ -42,7 +45,7 @@ const readinessCacheTTL = 2 * time.Second
 // PUBLIC router only — the internal admin router keeps chi defaults.
 //
 // These are router-level errors (no feature label) and are deliberately NOT
-// recorded on api_errors_total; http_requests_total already counts them via the
+// recorded on api.errors. http.server.request.count already counts them via the
 // metrics middleware.
 //
 // chi sets the Allow header on a 405 only through its DEFAULT handler; a custom
@@ -83,8 +86,27 @@ func main() {
 	logger.SetDefaultSlog(appLogger)
 	appLogger.LogInfo("starting application")
 
-	// Initialise Prometheus metrics FIRST so the pgx pool can be created
-	// with the query tracer wired in.
+	// Initialise OpenTelemetry providers (traces + metrics over OTLP) BEFORE
+	// metrics.New so its instruments bind to the global MeterProvider this
+	// installs. When telemetry is disabled (no OTEL_EXPORTER_OTLP_ENDPOINT) the
+	// globals stay no-op and the app runs without a Collector.
+	otelShutdown, otelEnabled, err := observability.Init(context.Background(), cfg.Observability)
+	if err != nil {
+		appLogger.LogError(errors.New("observability init failed"), err)
+		os.Exit(1)
+	}
+	if otelEnabled {
+		appLogger.LogInfo("telemetry enabled",
+			"otlp_endpoint", cfg.Observability.OTELExporterEndpoint,
+			"service_name", cfg.Observability.OTELServiceName,
+		)
+	} else {
+		appLogger.LogInfo("telemetry disabled: OTEL_EXPORTER_OTLP_ENDPOINT is unset, " +
+			"traces and metrics are no-ops; logs still emit to stdout")
+	}
+
+	// Initialise metrics AFTER the MeterProvider is installed so the pgx pool
+	// can be created with the query tracer wired in.
 	appMetrics := metrics.New()
 
 	// Each feature exports the tables it needs; main aggregates them so the
@@ -95,7 +117,7 @@ func main() {
 	)
 
 	// Initialise database with the query tracer. Every query on this pool
-	// records into db_query_duration_seconds and db_query_errors_total
+	// records into db.client.operation.duration and db.client.operation.errors
 	// (with pgx.ErrNoRows excluded from the error counter).
 	database, err := db.New(&cfg.Database, appLogger, appMetrics.QueryTracer(), requiredTables)
 	if err != nil {
@@ -103,9 +125,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Register the pool stats collector. It reads pool.Stat() at every
-	// scrape — no goroutine or background polling.
-	prometheus.MustRegister(metrics.NewPoolCollector(database.Pool()))
+	// Register the pool-stats async callback. It reads pool.Stat() once at each
+	// metric collection, with no goroutine or background polling.
+	if err := appMetrics.RegisterPoolCollector(database.Pool()); err != nil {
+		appLogger.LogError(errors.New("pool metrics registration failed"), err)
+	}
 
 	// Build the public API router (:PORT).
 	publicRouter := chi.NewRouter()
@@ -131,9 +155,10 @@ func main() {
 	// middleware in registration order, outer-first). The CORS middleware
 	// short-circuits every preflight OPTIONS request with 204 and returns
 	// WITHOUT calling next — so preflights never reach appMetrics.Middleware and
-	// do NOT appear in http_requests_total. This is intentional: CORS preflights
-	// are browser-protocol overhead, not application requests, and counting them
-	// would inflate the request metrics with traffic the handlers never see.
+	// do NOT appear in http.server.request.count. This is intentional: CORS
+	// preflights are browser-protocol overhead, not application requests, and
+	// counting them would inflate the request metrics with traffic the handlers
+	// never see.
 	// (To meter preflights instead, register appMetrics.Middleware before CORS.)
 	publicRouter.Use(middleware.CORS(middleware.CORSConfig{
 		AllowedOrigins:   cfg.CORS.AllowedOrigins,
@@ -151,8 +176,8 @@ func main() {
 	// Disabled by default: RATE_LIMIT_RPM=0 leaves rateLimiter nil and the
 	// middleware is never applied. When enabled it keys by client IP and is
 	// applied ONLY to the business-route group below (so the 429 still lands
-	// after the metrics middleware and is counted in http_requests_total) — NOT
-	// to /livez, /readyz, /health. Liveness/readiness probes (the container
+	// after the metrics middleware and is counted in http.server.request.count).
+	// NOT to /livez, /readyz, /health. Liveness/readiness probes (the container
 	// HEALTHCHECK every 10s, kubelet probes sharing a source-IP bucket) must
 	// never be 429'd into a restart loop; health endpoints rely on the readiness
 	// cache and edge controls instead of the app limiter.
@@ -192,8 +217,8 @@ func main() {
 	// unmatched paths with plain-text "404 page not found" and bare 405s, which
 	// bypass the single JSON-envelope rule. Override them so every public
 	// response — including these — uses shared.WriteJSONError. These are
-	// router-level (no feature label) and are NOT recorded on api_errors_total;
-	// http_requests_total already counts them via the metrics middleware.
+	// router-level (no feature label) and are NOT recorded on api.errors.
+	// http.server.request.count already counts them via the metrics middleware.
 	//
 	// Known intentional gaps (out of scope — those middlewares own their bodies):
 	// chimw.Timeout answers a timed-out request with a body-less 504, and
@@ -201,8 +226,8 @@ func main() {
 	// would mean reimplementing the middlewares.
 	registerEnvelopeFallbacks(publicRouter)
 	// The internal admin router (built below) deliberately keeps chi's plain-text
-	// defaults: it is an operator-only surface (Prometheus/oncall), not a public
-	// API, so envelope consistency there is unnecessary.
+	// defaults: it is an operator-only surface (oncall), not a public API, so
+	// envelope consistency there is unnecessary.
 
 	// Liveness probe — minimal check that the process is responsive.
 	// Does NOT check downstream dependencies, so a transient DB outage will
@@ -298,19 +323,18 @@ func main() {
 		})
 	})
 
-	// Build the internal admin router (:METRICS_PORT). This is for /metrics
-	// and any other operator-only endpoints. It must be reachable from
-	// Prometheus scrapers and oncall, but not from the public internet —
-	// restrict via NetworkPolicy / firewall / private network at the
-	// infrastructure layer. No CORS, no request body limit, no auth.
+	// Build the internal admin router (:METRICS_PORT). This is for operator-only
+	// endpoints (the mirrored health probes). It must be reachable from oncall
+	// but not from the public internet, so restrict via NetworkPolicy / firewall
+	// / private network at the infrastructure layer. No CORS, no request body
+	// limit, no auth.
 	//
-	// The metrics middleware is applied here too so scrapes themselves are
-	// recorded (no recursion — the counter increment lands on the NEXT
-	// scrape's snapshot).
+	// It no longer serves /metrics: metrics are pushed to the Collector over
+	// OTLP, not scraped from the app. The metrics middleware still wraps this
+	// router so admin-port requests are counted like any other.
 	internalRouter := chi.NewRouter()
 	internalRouter.Use(chimw.Recoverer)
 	internalRouter.Use(appMetrics.Middleware)
-	internalRouter.Handle("/metrics", metrics.Handler())
 	// Mirror all three health endpoints on the internal port so k8s probes (and
 	// operators) can target the internal listener without exposing the public
 	// API — and so readiness stays reachable even when PUBLIC_READINESS is false.
@@ -318,9 +342,23 @@ func main() {
 	internalRouter.Get("/readyz", readyHandler)
 	internalRouter.Get("/health", readyHandler)
 
+	// Wrap the public router in otelhttp so every request gets a server span,
+	// which becomes the active span in the request context. This is the single
+	// clean wrap point: it sits OUTSIDE chi, so the chi middleware order is
+	// untouched, and because the span is created before chi runs, RequestLogger
+	// can read trace_id/span_id off the context (see internal/middleware) and the
+	// metrics middleware can attach exemplars. When telemetry is disabled the
+	// global tracer is a no-op, so the span is a cheap no-op.
+	//
+	// A no-op MeterProvider is passed so otelhttp does NOT also emit its own
+	// http.server.* metrics, whose names would collide with the equivalents our
+	// own metrics middleware records. otelhttp here is for spans only.
+	publicHandler := otelhttp.NewHandler(publicRouter, "http.server.request",
+		otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()))
+
 	publicServer := &http.Server{
 		Addr:              ":" + cfg.Server.Port,
-		Handler:           publicRouter,
+		Handler:           publicHandler,
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
 		ReadTimeout:       cfg.Server.ReadTimeout,
 		WriteTimeout:      cfg.Server.WriteTimeout,
@@ -374,6 +412,13 @@ func main() {
 	}
 	if err := internalServer.Shutdown(ctx); err != nil {
 		appLogger.LogError(errors.New("internal server shutdown error"), err)
+	}
+
+	// Flush and shut down telemetry AFTER the servers stop (so the final spans
+	// and metric interval are captured) but BEFORE the DB closes (so any
+	// shutdown-path spans still export). A no-op when telemetry is disabled.
+	if err := otelShutdown(ctx); err != nil {
+		appLogger.LogError(errors.New("telemetry shutdown error"), err)
 	}
 
 	appLogger.LogInfo("closing database connection")

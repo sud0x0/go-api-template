@@ -1,6 +1,6 @@
 # go-api-template
 
-Production-ready Go API template. Layered architecture (handler → service → repository), one package per feature. Native pgx v5, embedded migrator, Prometheus-instrumented, GoReleaser pipeline with SLSA L3.
+Production-ready Go API template. Layered architecture (handler → service → repository), one package per feature. Native pgx v5, embedded migrator, OpenTelemetry-instrumented (traces and metrics over OTLP to a Collector), GoReleaser pipeline with SLSA L3.
 
 ## Common commands
 
@@ -23,7 +23,7 @@ Production-ready Go API template. Layered architecture (handler → service → 
 - **Env vars:** never call `os.Getenv` outside [`internal/config`](internal/config/config.go). Add new vars to the typed `Config`; the strict-int parsing and startup validation are already wired.
 - **String length:** use the custom `rune_max` / `rune_min` / `rune_len` validator tags registered via `shared.RegisterRuneLenValidators` — **never** the stdlib `max` / `min` / `len`. Rune count matches Postgres `VARCHAR(N)` semantics.
 - **Errors:** repositories wrap with multi-`%w` (sentinel + underlying driver error). Handlers map every error in `handleError` and emit `api_errors_total{feature,error_type}` — both labels are bounded constants, never derived from `err.Error()`.
-- **Two listeners:** `:PORT` is public; `:METRICS_PORT` is internal admin (`/metrics`, mirrored `/livez` and `/readyz`). The internal port has no auth — restrict at the infra layer.
+- **Two listeners:** `:PORT` is public and `:METRICS_PORT` is internal admin (mirrored `/livez`, `/readyz`, `/health`). The app serves no `/metrics` scrape endpoint. Metrics are pushed via OTLP to a Collector. The internal port has no auth, so restrict at the infra layer.
 - **Rate limiting:** expected at the network edge (LB / gateway / WAF) — that is the primary control. The app-level limiter (`RATE_LIMIT_RPM`, default `0` = disabled, keyed by IP) is only a fallback for edge-less deployments; its counters are per-instance. Post-auth, re-key it by user ID for business-aware per-endpoint limits. See README "Deployment requirements".
 - **Proxy trust:** `chimw.RealIP` is opt-in via `TRUST_PROXY_HEADERS` (default `false`) — `X-Forwarded-For`/`X-Real-IP` are spoofable, so trust them only behind a proxy that overwrites them.
 - **Errors over the wire:** every error response from a handler or the public router (incl. 404/405) is the JSON envelope `{"error":"<bounded_type>","message":…}` written via `shared.WriteJSONError` / `WriteJSONErrorPayload` — never `http.Error`. The only body-less exceptions are chi's `Timeout` 504 and `Recoverer` panic-500 (those middlewares own their responses). Router-level types (`not_found`, `method_not_allowed`) live in `internal/shared` and are not on `api_errors_total`. Oversized bodies are `413` (`body_too_large`); strict JSON decoding rejects unknown fields and trailing data. Pagination default is `shared.DefaultPageSize` (100), single-sourced with the OpenAPI spec; the log length limit lives only in the service (`shared.LogMaxChars`), not in struct tags.

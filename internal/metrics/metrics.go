@@ -1,112 +1,158 @@
-// Package metrics defines the process's Prometheus instrumentation: HTTP,
-// connection-pool, query-tracer, and the bounded api_errors_total metrics.
-// Every label value comes from a constant or a chi route pattern, never from
-// user input, so cardinality stays bounded.
+// Package metrics defines the process's OpenTelemetry (OTel) instrumentation:
+// HTTP, connection-pool, query-tracer, and the bounded api.errors metrics.
+// Instruments are created from the global OTel MeterProvider (installed by
+// internal/observability from main) and exported over OTLP to a Collector - the
+// app no longer serves a /metrics scrape endpoint. Every attribute value comes
+// from a constant or a chi route pattern, never from user input, so cardinality
+// stays bounded (see .claude/rules/security.md rule 7).
 package metrics
 
 import (
+	"context"
+	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
-// Metrics holds all Prometheus metrics for the application.
+// instrumentationName is the OTel meter scope for every instrument in this
+// package. It identifies which library produced the telemetry.
+const instrumentationName = "github.com/sud0x0/go-api-template/internal/metrics"
+
+// Instrument names. Where OpenTelemetry semantic conventions (semconv, spec
+// 1.41.0 - the highest package shipped in otel core v1.44.0, at or below the
+// targeted 1.43.0) define a standard name and unit for an equivalent signal we
+// PREFER it: http.server.request.duration, http.server.active_requests,
+// http.server.response.body.size (httpconv) and db.client.operation.duration
+// (dbconv). The request COUNT, the DB error counter, api.errors and the
+// db.pool.* stats have no semconv equivalent, so they keep descriptive
+// dotted-namespace names of our own. The Collector's Prometheus exporter
+// lower-snakes these (e.g. api.errors -> api_errors_total) for scraping.
+const (
+	metricRequestCount     = "http.server.request.count"
+	metricRequestDuration  = "http.server.request.duration"
+	metricRequestsInFlight = "http.server.active_requests"
+	metricResponseSize     = "http.server.response.body.size"
+
+	metricQueryDuration = "db.client.operation.duration"
+	metricQueryErrors   = "db.client.operation.errors"
+
+	metricAPIErrors = "api.errors"
+)
+
+// Attribute keys. HTTP and DB keys follow semconv (httpconv/dbconv). Feature
+// and error_type are this template's own bounded application labels. Every
+// value assigned to these keys is a constant, a chi route pattern, or an HTTP
+// status code - never a user-supplied string.
+const (
+	attrHTTPMethod  = "http.request.method"
+	attrHTTPRoute   = "http.route"
+	attrHTTPStatus  = "http.response.status_code"
+	attrDBOperation = "db.operation.name"
+	attrFeature     = "feature"
+	attrErrorType   = "error_type"
+)
+
+// Metrics holds all OTel instruments for the application.
 type Metrics struct {
+	// meter is retained so async pool instruments can be registered after the
+	// database pool exists (see RegisterPoolCollector).
+	meter metric.Meter
+
 	// HTTP layer
-	requestsTotal    *prometheus.CounterVec
-	requestDuration  *prometheus.HistogramVec
-	requestsInFlight prometheus.Gauge
-	responseSize     *prometheus.HistogramVec
+	requestsTotal    metric.Int64Counter
+	requestDuration  metric.Float64Histogram
+	requestsInFlight metric.Int64UpDownCounter
+	responseSize     metric.Int64Histogram
 
 	// Database layer (populated by the QueryTracer wired into pgxpool)
-	queryDuration *prometheus.HistogramVec
-	queryErrors   *prometheus.CounterVec
+	queryDuration metric.Float64Histogram
+	queryErrors   metric.Int64Counter
 
-	// API error breakdown by feature/error_type — populated by handlers
+	// API error breakdown by feature/error_type - populated by handlers
 	// through the HandlerMetrics interface.
-	apiErrors *prometheus.CounterVec
+	apiErrors metric.Int64Counter
 }
 
-// New creates and registers all Prometheus metrics on the default registry.
+// New creates all instruments from the global OTel MeterProvider. Call it after
+// internal/observability has installed the providers (main does this). When
+// telemetry is disabled the global provider is a no-op, so every instrument is
+// a no-op and this still succeeds - the app boots with or without a Collector.
+//
+// Unlike the previous Prometheus constructor this is NOT call-once: OTel dedupes
+// instruments by name within a meter, so a second call would not panic. We still
+// construct it exactly once from main (see .claude/rules/decisions.md #8).
 func New() *Metrics {
-	m := &Metrics{
-		requestsTotal: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "http_requests_total",
-				Help: "Total number of HTTP requests by method, path, and status code.",
-			},
-			[]string{"method", "path", "status"},
-		),
-		requestDuration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "http_request_duration_seconds",
-				Help:    "HTTP request duration in seconds.",
-				Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-			},
-			[]string{"method", "path", "status"},
-		),
-		requestsInFlight: prometheus.NewGauge(
-			prometheus.GaugeOpts{
-				Name: "http_requests_in_flight",
-				Help: "Current number of HTTP requests being processed.",
-			},
-		),
-		responseSize: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "http_response_size_bytes",
-				Help:    "HTTP response size in bytes.",
-				Buckets: []float64{100, 1000, 10000, 100000, 1000000},
-			},
-			[]string{"method", "path", "status"},
-		),
+	return newWithMeter(otel.Meter(instrumentationName))
+}
 
-		queryDuration: prometheus.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    "db_query_duration_seconds",
-				Help:    "Database query duration in seconds, labelled by SQL operation keyword.",
-				Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
-			},
-			[]string{"operation"},
-		),
-		queryErrors: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "db_query_errors_total",
-				Help: "Database query errors, labelled by SQL operation keyword. pgx.ErrNoRows is excluded.",
-			},
-			[]string{"operation"},
-		),
+// newWithMeter is the testable constructor: tests pass a meter backed by a
+// manual reader so they can collect and assert on the emitted data points.
+func newWithMeter(meter metric.Meter) *Metrics {
+	return &Metrics{
+		meter: meter,
+		requestsTotal: must(meter.Int64Counter(
+			metricRequestCount,
+			metric.WithUnit("{request}"),
+			metric.WithDescription("Total number of HTTP requests by method, route, and status code."),
+		)),
+		requestDuration: must(meter.Float64Histogram(
+			metricRequestDuration,
+			metric.WithUnit("s"),
+			metric.WithDescription("HTTP request duration in seconds."),
+			metric.WithExplicitBucketBoundaries(.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10),
+		)),
+		requestsInFlight: must(meter.Int64UpDownCounter(
+			metricRequestsInFlight,
+			metric.WithUnit("{request}"),
+			metric.WithDescription("Current number of HTTP requests being processed."),
+		)),
+		responseSize: must(meter.Int64Histogram(
+			metricResponseSize,
+			metric.WithUnit("By"),
+			metric.WithDescription("HTTP response body size in bytes."),
+			metric.WithExplicitBucketBoundaries(100, 1000, 10000, 100000, 1000000),
+		)),
 
-		apiErrors: prometheus.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "api_errors_total",
-				Help: "API errors emitted by handlers, labelled by feature and a bounded error_type.",
-			},
-			[]string{"feature", "error_type"},
-		),
+		queryDuration: must(meter.Float64Histogram(
+			metricQueryDuration,
+			metric.WithUnit("s"),
+			metric.WithDescription("Database query duration in seconds, labelled by SQL operation keyword."),
+			metric.WithExplicitBucketBoundaries(.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5),
+		)),
+		queryErrors: must(meter.Int64Counter(
+			metricQueryErrors,
+			metric.WithUnit("{error}"),
+			metric.WithDescription("Database query errors, labelled by SQL operation keyword. pgx.ErrNoRows is excluded."),
+		)),
+
+		apiErrors: must(meter.Int64Counter(
+			metricAPIErrors,
+			metric.WithUnit("{error}"),
+			metric.WithDescription("API errors emitted by handlers, labelled by feature and a bounded error_type."),
+		)),
 	}
+}
 
-	prometheus.MustRegister(
-		m.requestsTotal,
-		m.requestDuration,
-		m.requestsInFlight,
-		m.responseSize,
-		m.queryDuration,
-		m.queryErrors,
-		m.apiErrors,
-	)
-
-	return m
+// must panics if instrument creation fails. Instrument creation only fails on a
+// malformed static name - a programming error caught by tests, not a runtime
+// condition - so panicking keeps New's signature clean at the call site.
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(fmt.Sprintf("metrics: instrument creation failed: %v", err))
+	}
+	return v
 }
 
 // QueryTracer returns a pgx.QueryTracer that records into this Metrics
-// instance's queryDuration and queryErrors vectors. Wire the returned
-// value into pgxpool.Config.ConnConfig.Tracer (db.New does this).
+// instance's query duration and error instruments. Wire the returned value into
+// pgxpool.Config.ConnConfig.Tracer (db.New does this).
 func (m *Metrics) QueryTracer() pgx.QueryTracer {
 	return &QueryTracer{
 		duration: m.queryDuration,
@@ -114,63 +160,64 @@ func (m *Metrics) QueryTracer() pgx.QueryTracer {
 	}
 }
 
-// IncAPIError increments the api_errors_total counter. The label set is
-// bounded: feature names are package-level constants (e.g. "log") and
-// error_type values come from the package's ErrType* constants. Never
-// pass strings derived from err.Error() here.
+// IncAPIError increments the api.errors counter. The attribute set is bounded:
+// feature names are package-level constants (e.g. "log") and error_type values
+// come from the package's ErrType* constants. Never pass strings derived from
+// err.Error() here.
 func (m *Metrics) IncAPIError(feature, errorType string) {
-	m.apiErrors.WithLabelValues(feature, errorType).Inc()
+	m.apiErrors.Add(context.Background(), 1, metric.WithAttributes(
+		attribute.String(attrFeature, feature),
+		attribute.String(attrErrorType, errorType),
+	))
 }
 
-// Handler returns the Prometheus HTTP handler for the /metrics endpoint.
-func Handler() http.Handler {
-	return promhttp.Handler()
-}
-
-// Middleware returns HTTP middleware that records Prometheus metrics per
-// request. The path label uses chi's matched route pattern (or "unmatched"
-// for 404s) so dynamic URL segments do not create unbounded label values.
+// Middleware returns HTTP middleware that records OTel metrics per request. The
+// http.route attribute uses chi's matched route pattern (or "unmatched" for
+// 404s) so dynamic URL segments do not create unbounded attribute values.
 //
-// A single deferred block performs all observations so the metrics are
-// recorded even when the handler panics. If the handler panics, the
-// recovered value is re-thrown so chi's Recoverer (registered upstream
-// in the chain) remains responsible for writing the 500 response and
-// logging the stack — this middleware is purely an observer.
+// A single deferred block performs all observations so the metrics are recorded
+// even when the handler panics. If the handler panics, the recovered value is
+// re-thrown so chi's Recoverer (registered upstream in the chain) remains
+// responsible for writing the 500 response and logging the stack - this
+// middleware is purely an observer.
 //
-// Note on /metrics: requests to /metrics are recorded like any other
-// request. There is no recursion: incrementing a counter while serving a
-// scrape only changes what the NEXT scrape sees. The one visible side
-// effect is that http_requests_total{path="/metrics"} grows and each
-// scrape adds one observation to the duration and size histograms.
+// The request context is passed to every Add/Record call so the SDK can attach
+// exemplars linking a data point back to the active trace span.
 func (m *Metrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		start := time.Now()
-		m.requestsInFlight.Inc()
+		// active_requests is keyed by method (semconv). The matching -1 in the
+		// deferred block uses the same method, so the up-down counter nets out.
+		methodAttr := metric.WithAttributes(attribute.String(attrHTTPMethod, r.Method))
+		m.requestsInFlight.Add(ctx, 1, methodAttr)
 		wrapped := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 
 		defer func() {
-			m.requestsInFlight.Dec()
+			m.requestsInFlight.Add(ctx, -1, methodAttr)
 
 			rec := recover()
 			statusCode := wrapped.Status()
 			switch {
 			case statusCode == 0 && rec != nil:
-				// Handler panicked before writing a status — record 500.
+				// Handler panicked before writing a status - record 500.
 				statusCode = http.StatusInternalServerError
 			case statusCode == 0:
 				// Handler returned without explicit WriteHeader → implicit 200.
 				statusCode = http.StatusOK
 			}
-			// If a status was explicitly written before the panic, we
-			// keep that status as the label — that's what the client
-			// would see if the body completed.
+			// If a status was explicitly written before the panic, we keep that
+			// status as the attribute - that's what the client would see if the
+			// body completed.
 
-			path := routeLabel(r)
-			status := strconv.Itoa(statusCode)
-			duration := time.Since(start).Seconds()
-			m.requestsTotal.WithLabelValues(r.Method, path, status).Inc()
-			m.requestDuration.WithLabelValues(r.Method, path, status).Observe(duration)
-			m.responseSize.WithLabelValues(r.Method, path, status).Observe(float64(wrapped.BytesWritten()))
+			attrs := metric.WithAttributes(
+				attribute.String(attrHTTPMethod, r.Method),
+				attribute.String(attrHTTPRoute, routeLabel(r)),
+				attribute.Int(attrHTTPStatus, statusCode),
+			)
+			m.requestsTotal.Add(ctx, 1, attrs)
+			m.requestDuration.Record(ctx, time.Since(start).Seconds(), attrs)
+			m.responseSize.Record(ctx, int64(wrapped.BytesWritten()), attrs)
 
 			if rec != nil {
 				// Re-panic so chi.Recoverer upstream handles the 500.
@@ -182,8 +229,8 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// routeLabel returns chi's matched route pattern for matched requests, and
-// the literal "unmatched" for unmatched (404) requests. This bounds label
+// routeLabel returns chi's matched route pattern for matched requests, and the
+// literal "unmatched" for unmatched (404) requests. This bounds attribute
 // cardinality so dynamic URL segments do not explode the metric series.
 func routeLabel(r *http.Request) string {
 	rctx := chi.RouteContext(r.Context())

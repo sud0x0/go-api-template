@@ -37,3 +37,24 @@ Initial public release.
 ### Added
 
 - initial commit
+
+## [3.0.0] - 2027-01-01
+
+### Added
+
+### Changed
+
+## [3.0.1] - 2027-01-02
+
+<!--
+This whole section body is only a multi-line HTML comment,
+so the hardened emptiness rule must treat it as empty.
+-->
+
+## [3.0.2] - 2027-01-03
+
+### Added
+
+<!-- a seeded note comment -->
+
+- a real bullet

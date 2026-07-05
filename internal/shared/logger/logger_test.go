@@ -127,11 +127,48 @@ func TestSlogLogger_WithRequestContext_EmptyFieldsOmitted(t *testing.T) {
 			t.Errorf("expected %q to be present", mustBe)
 		}
 	}
-	for _, mustNotBe := range []string{"path", "ip", "user_id"} {
+	for _, mustNotBe := range []string{"path", "ip", "user_id", "trace_id", "span_id"} {
 		if _, ok := entry[mustNotBe]; ok {
 			t.Errorf("%q should be omitted when empty, got %v", mustNotBe, entry[mustNotBe])
 		}
 	}
+}
+
+// TestSlogLogger_WithRequestContext_TraceCorrelation verifies the trace
+// correlation contract: when TraceID/SpanID are bound they appear on every
+// log line, and when they are empty neither attribute is emitted (a zero ID
+// must never surface).
+func TestSlogLogger_WithRequestContext_TraceCorrelation(t *testing.T) {
+	t.Run("present when set", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		scoped := testLogger(buf).WithRequestContext(RequestContext{
+			RequestID: "req-1",
+			TraceID:   "4bf92f3577b34da6a3ce929d0e0e4736",
+			SpanID:    "00f067aa0ba902b7",
+		})
+		scoped.LogInfo("work")
+
+		entry := decodeLines(t, buf)[0]
+		if entry["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
+			t.Errorf("trace_id = %v, want the bound value", entry["trace_id"])
+		}
+		if entry["span_id"] != "00f067aa0ba902b7" {
+			t.Errorf("span_id = %v, want the bound value", entry["span_id"])
+		}
+	})
+
+	t.Run("absent when empty", func(t *testing.T) {
+		buf := &bytes.Buffer{}
+		scoped := testLogger(buf).WithRequestContext(RequestContext{RequestID: "req-1"})
+		scoped.LogInfo("work")
+
+		entry := decodeLines(t, buf)[0]
+		for _, k := range []string{"trace_id", "span_id"} {
+			if _, ok := entry[k]; ok {
+				t.Errorf("%q should be omitted when empty, got %v", k, entry[k])
+			}
+		}
+	})
 }
 
 // TestSlogLogger_WithRequestContext_EmptyReturnsSelf verifies the

@@ -9,7 +9,7 @@ This repo verifies against **OWASP ASVS 5.0.0 at Level 2** (L1 included by defin
 of scope — [`decisions.md` #14](../../rules/decisions.md)). Two documents drive the review:
 
 - **Write-time rule set:** [`.claude/rules/security.md`](../../rules/security.md) — the seven rules, unchanged, demonstrated in [`internal/userlog/`](../../../internal/userlog/).
-- **Verification map:** [`references/asvs-map.md`](references/asvs-map.md) — every applicable L1/L2 requirement, its status, and the repo control that satisfies it. Built by reading the committed standard ([`references/asvs-5.0.0.txt`](references/asvs-5.0.0.txt) / PDF).
+- **Verification map:** [`references/asvs-map.md`](references/asvs-map.md) — every applicable L1/L2 requirement, its status, and the repo control that satisfies it. Built by reading the committed standard. The greppable [`references/asvs-5.0.0.txt`](references/asvs-5.0.0.txt) is a plain-text rendering of the official ASVS CSV committed alongside it (one line per requirement as `[L{n}] {req_id}  {text}`, so `grep '^\s*\[L[12]\]'` pulls the L1 and L2 rows and `grep 'V8\.'` finds a chapter's rows).
 
 **Cite evidence for every verdict** — a `file:line`, a grep result, or a scanner line, plus the
 **ASVS requirement ID** (reference form per the standard's *"How to Reference ASVS Requirements"*:

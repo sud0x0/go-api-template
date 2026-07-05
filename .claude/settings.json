@@ -10,18 +10,22 @@
       "Bash(go vet *)",
       "Bash(go run *)",
       "Bash(golangci-lint run *)",
-      "Bash(gofmt -w *)",
+      "Bash(gofmt *)",
       "Bash(podman ps *)",
       "Bash(podman logs *)",
       "Bash(podman images *)",
       "Bash(podman inspect *)",
-      "Bash(podman info *)"
+      "Bash(podman info *)",
+      "Bash(git diff *)"
     ],
     "deny": [
       "Edit(.claude/settings.json)",
       "Write(.claude/settings.json)",
       "Edit(.claude/settings.local.json)",
-      "Write(.claude/settings.local.json)"
+      "Write(.claude/settings.local.json)",
+      "Bash(git commit*)",
+      "Bash(git tag*)",
+      "Bash(git push*)"
     ]
   }
 }

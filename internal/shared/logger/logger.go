@@ -37,6 +37,14 @@ type RequestContext struct {
 	Path      string
 	RemoteIP  string
 	UserID    string // populated after auth middleware runs; empty pre-auth
+	// TraceID and SpanID correlate this request's log lines to its trace. They
+	// are the hex-encoded OTel IDs of the active span, extracted by the request
+	// logger middleware from the request context (the middleware owns the OTel
+	// dependency so this package stays OTel-free). Both are empty when there is
+	// no valid span (telemetry disabled, or a non-request log) and empty IDs
+	// are omitted so a zero ID never appears in the output.
+	TraceID string
+	SpanID  string
 }
 
 // Logger is the canonical logging interface used across all packages.
@@ -162,6 +170,12 @@ func (l *SlogLogger) WithRequestContext(rc RequestContext) Logger {
 	}
 	if rc.UserID != "" {
 		attrs = append(attrs, slog.String("user_id", rc.UserID))
+	}
+	if rc.TraceID != "" {
+		attrs = append(attrs, slog.String("trace_id", rc.TraceID))
+	}
+	if rc.SpanID != "" {
+		attrs = append(attrs, slog.String("span_id", rc.SpanID))
 	}
 	if len(attrs) == 0 {
 		return l
