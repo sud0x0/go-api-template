@@ -215,6 +215,8 @@ On startup the middleware does OIDC discovery against `OIDC_ISSUER_URL` and buil
 
 What the verifier enforces (each cited by ASVS ID in [`auth_middleware.go`](internal/middleware/auth_middleware.go)): signature valid against the discovered keys, an explicit algorithm allowlist (RS256 and ES256, never `none`), key material only from the trusted JWKS (a token-supplied `jku`/`x5u`/`jwk` is ignored), `exp`/`nbf` validity, audience checked against `OIDC_AUDIENCE`, and the user identified from `iss` plus `sub` (never a mutable claim like email). The issuer must match `OIDC_ISSUER_URL` exactly. `oidc.InsecureIssuerURLContext` is not used.
 
+**Token type.** The middleware rejects any token whose `token_use` claim is `id`, so a Cognito-style id token is not accepted for authorisation. IdPs that instead signal token type only through RFC 9068's `typ: at+jwt` JOSE header are not distinguished by that claim, because go-oidc does not surface the header, though audience validation still blocks an id token minted for a different audience. A fork whose IdP needs stricter token-type checking should add it in the middleware.
+
 **Internal UUID mapping.** The `user_id` column is `UUID NOT NULL`, but an IdP `sub` is often not a UUID (`auth0|12345`, an email, a numeric id). The middleware derives the internal id deterministically as `UUIDv5(fixed-namespace, iss|sub)`, so the same identity always maps to the same UUID with no lookup table. A real deployment may instead keep a `users` table mapping `(iss, sub)` to an internal id and resolve it in the middleware before `shared.WithUserID`. Either way `shared.UserIDFromContext` enforces the UUID shape at the single read point.
 
 ### Layer 2: Authorisation (OPA)

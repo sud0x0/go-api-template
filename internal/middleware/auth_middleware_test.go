@@ -224,38 +224,105 @@ func TestOIDCAuth_RejectsIDToken(t *testing.T) {
 	}
 }
 
-// Roles from the token's claims are mapped to internal roles and reach the
-// authorisation middleware via the context.
+// TestOIDCAuth_PropagatesRoles pins the vendor-agnostic role boundary END TO END
+// through the middleware: a verified token's roles/groups claims must reach the
+// authorisation layer as internal roles (via rolesFromContext), mapped exactly as
+// mapClaimsToRoles defines. This is the wiring that makes the IdP swappable, so
+// each case captures the context the middleware hands to next and asserts the
+// roles on it. Roles are NOT required to authenticate, so every case still
+// yields 200 with a user id set.
 func TestOIDCAuth_PropagatesRoles(t *testing.T) {
 	s := newTestSigner(t)
 	auth := testAuthenticator(verifierFor(s.priv.Public()))
 
-	claims := validClaims("role-user")
-	claims["roles"] = []string{"admin"}
-	claims["groups"] = []string{"eng"}
-
-	var gotRoles []string
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotRoles = rolesFromContext(r.Context())
-		w.WriteHeader(http.StatusOK)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	req.Header.Set("Authorization", "Bearer "+s.sign(t, claims))
-	rr := httptest.NewRecorder()
-	auth.Handler(next).ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusOK {
-		t.Fatalf("got status %d, want 200 (body=%q)", rr.Code, rr.Body.String())
+	cases := []struct {
+		name   string
+		roles  any // claim value to set, or nil to omit the claim entirely
+		groups any
+		want   []string
+	}{
+		{"roles claim propagates", []string{"admin"}, nil, []string{"admin"}},
+		{"groups claim propagates", nil, []string{"eng"}, []string{"eng"}},
+		{"union and de-duplication", []string{"admin"}, []string{"admin", "eng"}, []string{"admin", "eng"}},
+		{"empty when both absent", nil, nil, nil},
+		{"blank entries dropped", []string{"admin", ""}, []string{"", "eng"}, []string{"admin", "eng"}},
 	}
-	want := map[string]bool{"admin": true, "eng": true}
-	if len(gotRoles) != len(want) {
-		t.Fatalf("roles: got %v, want keys %v", gotRoles, want)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			claims := validClaims("role-user")
+			if c.roles != nil {
+				claims["roles"] = c.roles
+			}
+			if c.groups != nil {
+				claims["groups"] = c.groups
+			}
+
+			var gotRoles []string
+			var gotUser string
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotRoles = rolesFromContext(r.Context())
+				gotUser, _ = shared.UserIDFromContext(r.Context())
+				w.WriteHeader(http.StatusOK)
+			})
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
+			req.Header.Set("Authorization", "Bearer "+s.sign(t, claims))
+			rr := httptest.NewRecorder()
+			auth.Handler(next).ServeHTTP(rr, req)
+
+			// Roles never gate authentication.
+			if rr.Code != http.StatusOK {
+				t.Fatalf("got status %d, want 200 (body=%q)", rr.Code, rr.Body.String())
+			}
+			if gotUser == "" {
+				t.Error("request authenticated but no user id was set on the context")
+			}
+			if !equalRoles(gotRoles, c.want) {
+				t.Errorf("rolesFromContext: got %v, want %v", gotRoles, c.want)
+			}
+		})
 	}
-	for _, r := range gotRoles {
-		if !want[r] {
-			t.Errorf("unexpected role %q in %v", r, gotRoles)
+}
+
+// TestMapClaimsToRoles is the direct, pure-function test of the mapping the
+// middleware test above exercises through the wire. Order is deterministic:
+// roles first, then groups, each de-duplicated, empty strings dropped.
+func TestMapClaimsToRoles(t *testing.T) {
+	cases := []struct {
+		name   string
+		roles  []string
+		groups []string
+		want   []string
+	}{
+		{"roles only", []string{"admin"}, nil, []string{"admin"}},
+		{"groups only", nil, []string{"eng"}, []string{"eng"}},
+		{"union preserves roles-then-groups order", []string{"admin"}, []string{"eng"}, []string{"admin", "eng"}},
+		{"de-duplicates across roles and groups", []string{"admin"}, []string{"admin", "eng"}, []string{"admin", "eng"}},
+		{"de-duplicates within roles", []string{"admin", "admin"}, nil, []string{"admin"}},
+		{"drops blank entries", []string{"admin", ""}, []string{"", "eng"}, []string{"admin", "eng"}},
+		{"both empty yields nil", nil, nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mapClaimsToRoles(c.roles, c.groups)
+			if !equalRoles(got, c.want) {
+				t.Errorf("mapClaimsToRoles(%v, %v) = %v, want %v", c.roles, c.groups, got, c.want)
+			}
+		})
+	}
+}
+
+// equalRoles compares role slices for order-sensitive equality; a nil and an
+// empty slice both count as "no roles".
+func equalRoles(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
 		}
 	}
+	return true
 }
 
 // NewOIDCAuthenticator must reject a discovery document whose issuer does not
