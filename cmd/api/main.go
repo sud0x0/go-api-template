@@ -131,6 +131,40 @@ func main() {
 		appLogger.LogError(errors.New("pool metrics registration failed"), err)
 	}
 
+	// Two-layer auth model (see .claude/rules/decisions.md): LAYER 1
+	// authentication (OIDC, in-process) then LAYER 2 authorisation (OPA sidecar
+	// over REST). Both are opt-in — when a layer is disabled its middleware is nil
+	// and simply not registered, so the template boots with no IdP and no OPA for
+	// local dev. Constructed BEFORE the router so an OIDC discovery failure aborts
+	// startup rather than booting with auth "enabled" but no verifier (which would
+	// fail open). The disabled paths log a WARN so an unauthenticated deployment is
+	// never a silent surprise.
+	var oidcAuth *middleware.OIDCAuthenticator
+	if cfg.Auth.OIDC.Enabled {
+		discoveryCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		oidcAuth, err = middleware.NewOIDCAuthenticator(discoveryCtx, cfg.Auth.OIDC, appLogger)
+		cancel()
+		if err != nil {
+			appLogger.LogError(errors.New("oidc discovery failed"), err)
+			os.Exit(1)
+		}
+		appLogger.LogInfo("authentication enabled (OIDC)",
+			"issuer", cfg.Auth.OIDC.IssuerURL, "audience", cfg.Auth.OIDC.Audience)
+	} else {
+		appLogger.LogWarn("authentication DISABLED: OIDC_ISSUER_URL is unset — " +
+			"/api/v1 runs unauthenticated (local-dev mode; set OIDC_ISSUER_URL to enable)")
+	}
+
+	var opaAuthz *middleware.OPAAuthorizer
+	if cfg.Auth.OPA.Enabled {
+		opaAuthz = middleware.NewOPAAuthorizer(cfg.Auth.OPA, appLogger)
+		appLogger.LogInfo("authorisation enabled (OPA)",
+			"opa_url", cfg.Auth.OPA.URL, "decision_path", cfg.Auth.OPA.DecisionPath)
+	} else {
+		appLogger.LogWarn("authorisation DISABLED: OPA_URL is unset — " +
+			"/api/v1 requests are not policy-checked (local-dev mode; set OPA_URL to enable)")
+	}
+
 	// Build the public API router (:PORT).
 	publicRouter := chi.NewRouter()
 
@@ -301,21 +335,31 @@ func main() {
 
 		// API routes.
 		r.Route("/api/v1", func(r chi.Router) {
-			// TODO(auth): wire auth middleware here — see .claude/rules/decisions.md
-			// #13 (auth is intentionally contract-only). Any middleware that validates
-			// a token and stores the user ID on the request context with
-			// shared.WithUserID(ctx, userID) will work automatically — handlers read
-			// it back via shared.UserIDFromContext. The key lives in internal/shared
-			// so infrastructure middleware never imports a feature package. All
-			// repository queries are scoped by user_id.
+			// Two-layer auth model (see .claude/rules/decisions.md). Middlewares
+			// run in registration order, so LAYER 1 authentication is registered
+			// before LAYER 2 authorisation: a request must be authenticated before
+			// it is policy-checked. Both are opt-in — when a layer is disabled its
+			// value is nil and it is not registered, so local dev with no IdP / no
+			// OPA still works.
 			//
-			// CONTRACT: the user ID MUST be a UUID (the user_id column is UUID NOT
-			// NULL; UserIDFromContext rejects non-UUIDs as 401). An external IdP
-			// whose `sub` is not a UUID (e.g. "auth0|12345", an email) needs a
-			// mapping table from sub → internal UUID; resolve it in the middleware
-			// before calling shared.WithUserID.
-			// Example:
-			//   r.Use(authMiddleware.Handler)
+			// Layer 1 (OIDC): validates the Bearer access token against the IdP's
+			// discovered JWKS and stores the caller's internal UUID via
+			// shared.WithUserID — handlers read it back via
+			// shared.UserIDFromContext. The key lives in internal/shared so this
+			// infrastructure middleware never imports a feature package.
+			//
+			// Layer 2 (OPA): FUNCTION-LEVEL authorisation over OPA's REST Data API,
+			// fail closed. It does NOT replace the repository's WHERE user_id = $N
+			// row-ownership scoping — the two layers are deliberately SEPARATE: OPA
+			// answers "may this role call this endpoint", the SQL answers "may this
+			// user see this row". A future change must not collapse them by pushing
+			// row filtering into OPA.
+			if oidcAuth != nil {
+				r.Use(oidcAuth.Handler)
+			}
+			if opaAuthz != nil {
+				r.Use(opaAuthz.Handler)
+			}
 
 			// Each feature registers its own routes — adding a feature is one line
 			// here, not five. See userlog.Handler.Routes.

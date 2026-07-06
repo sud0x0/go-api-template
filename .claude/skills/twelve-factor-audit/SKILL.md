@@ -197,7 +197,7 @@ For each factor, a short paragraph:
 
 Length target: ~80-120 words per factor for the detail section; tighter for "Strong" verdicts, longer for "Medium" or worse.
 
-End with a `TL;DR` count: how many strong, how many medium, how many weak/violating. Note any deliberate trade-offs the codebase has documented (e.g. "auth is intentionally not implemented in a template — out of scope for an API-template assessment").
+End with a `TL;DR` count: how many strong, how many medium, how many weak/violating. Note any deliberate trade-offs the codebase has documented (e.g. "no async worker process type — the template is a single web process, added only when a real need exists — out of scope for an API-template assessment").
 
 ## Common findings on this template
 
@@ -212,5 +212,5 @@ When auditing a fork of this template, those baselines should hold. The interest
 ## Non-negotiables
 
 - **Cite evidence.** Every verdict must have at least one file path, grep result, or pattern citation. Vibes are not evidence.
-- **Distinguish "not implemented" from "wrong".** Authentication, async workers, and many other features may be deliberately absent in a template. That's not a 12-factor violation — flag it as scope-not-implemented.
+- **Distinguish "not implemented" from "wrong".** Async workers, file uploads, and many other features may be deliberately absent in a template. That's not a 12-factor violation — flag it as scope-not-implemented.
 - **Don't recommend over-engineering.** If a codebase has no async work, don't recommend adding a worker process type just to "improve" factor 8. The factor is about the right pattern when the need exists, not about always having one of everything.

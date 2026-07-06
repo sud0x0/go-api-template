@@ -59,8 +59,9 @@ Format: **`TODO(scope): description — <pointer>`**, where `<pointer>` is one o
 - a named, deliberate deferral documented somewhere a reader can find.
 
 **A TODO without a pointer is a finding** — it's an orphaned intention nobody will ever action.
-`scope` is the area (`auth`, `perf`, `migration`). Example in-tree: the auth-seam TODO in
-[`cmd/api/main.go`](../../../cmd/api/main.go) is `TODO(auth): … — see .claude/rules/decisions.md #13`.
+`scope` is the area (`auth`, `perf`, `migration`). The pointer form is what matters: a TODO like
+`TODO(perf): batch these inserts — see decisions.md #6` names its scope and cites where the deferral
+is justified, so a reader can find the rationale instead of guessing.
 
 ## Verification
 Comments have no compiler, so check them by reading:

@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestConnectionString_EscapesSpecialCharacters (item 18) verifies that a
@@ -301,6 +302,96 @@ func TestLoad_FailsOnInvertedTimeouts(t *testing.T) {
 	if !strings.Contains(err.Error(), "WRITE_TIMEOUT") || !strings.Contains(err.Error(), "REQUEST_TIMEOUT") {
 		t.Errorf("error should name both timeouts, got: %v", err)
 	}
+}
+
+// TestLoad_AuthConfig covers the two-layer auth config: both layers off by
+// default, each derives Enabled from its endpoint, and the fail-fast rules name
+// the offending variable.
+func TestLoad_AuthConfig(t *testing.T) {
+	t.Run("both disabled by default", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.Auth.OIDC.Enabled {
+			t.Error("OIDC should default to disabled when OIDC_ISSUER_URL is unset")
+		}
+		if cfg.Auth.OPA.Enabled {
+			t.Error("OPA should default to disabled when OPA_URL is unset")
+		}
+		// Defaults for the OPA knobs are still populated even while disabled.
+		if cfg.Auth.OPA.DecisionPath != "v1/data/api/authz/allow" {
+			t.Errorf("OPA_DECISION_PATH default: got %q", cfg.Auth.OPA.DecisionPath)
+		}
+		if cfg.Auth.OPA.Timeout != 100*time.Millisecond {
+			t.Errorf("OPA_TIMEOUT_MS default: got %v, want 100ms", cfg.Auth.OPA.Timeout)
+		}
+	})
+
+	t.Run("OIDC enabled by issuer requires audience", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ISSUER_URL", "https://accounts.example.com")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "OIDC_AUDIENCE") {
+			t.Fatalf("expected failure naming OIDC_AUDIENCE, got: %v", err)
+		}
+	})
+
+	t.Run("OIDC enabled with issuer and audience", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ISSUER_URL", "https://accounts.example.com")
+		t.Setenv("OIDC_AUDIENCE", "go-api")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.Auth.OIDC.Enabled {
+			t.Error("OIDC should be enabled when an issuer is set")
+		}
+	})
+
+	t.Run("OIDC_ENABLED=true without issuer fails", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ENABLED", "true")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER_URL") {
+			t.Fatalf("expected failure naming OIDC_ISSUER_URL, got: %v", err)
+		}
+	})
+
+	t.Run("OPA enabled by URL", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OPA_URL", "http://opa:8181")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !cfg.Auth.OPA.Enabled {
+			t.Error("OPA should be enabled when OPA_URL is set")
+		}
+	})
+
+	t.Run("OPA_ENABLED=true without URL fails", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OPA_ENABLED", "true")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "OPA_URL") {
+			t.Fatalf("expected failure naming OPA_URL, got: %v", err)
+		}
+	})
+
+	t.Run("OPA timeout is bounded", func(t *testing.T) {
+		for _, ms := range []string{"0", "60001"} {
+			setRequiredDBEnv(t)
+			t.Setenv("OPA_URL", "http://opa:8181")
+			t.Setenv("OPA_TIMEOUT_MS", ms)
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "OPA_TIMEOUT_MS") {
+				t.Fatalf("OPA_TIMEOUT_MS=%s: expected failure naming OPA_TIMEOUT_MS, got: %v", ms, err)
+			}
+		}
+	})
 }
 
 // TestLoadDatabase_PoolSizeBounds covers the startup bounds on the connection

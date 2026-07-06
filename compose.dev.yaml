@@ -63,6 +63,8 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      opa:
+        condition: service_healthy
 
   # OpenTelemetry Collector: receives OTLP from the app, batches, exports to a
   # debug logger, and re-exposes Prometheus on :8889 for local scraping. See
@@ -78,6 +80,54 @@ services:
       - "4317:4317" # OTLP gRPC receiver
       - "4318:4318" # OTLP HTTP receiver (the app exports here)
       - "8889:8889" # Prometheus exporter, scrape metrics at localhost:8889/metrics
+
+  # Open Policy Agent (OPA) sidecar: LAYER 2 authorisation. The app POSTs the
+  # decision input to OPA's REST Data API and enforces the boolean result, failing
+  # closed (see internal/middleware/authz_middleware.go). Runs as a SEPARATE
+  # process — the sidecar model, mirroring the otel-collector service above, never
+  # inside the app image. The standard openpolicyagent/opa image is used (NOT the
+  # -envoy variant): the app calls OPA's REST API directly, so no Envoy is in the
+  # path. The `-static` (distroless) tag is pinned because it is multi-arch
+  # (amd64 + arm64) — the plain `1.9.0` tag is amd64-only and will not run on
+  # arm64 hosts (Apple Silicon / arm VMs).
+  #
+  # LOCAL-DEV policy source: the policy is bind-mounted read-only from
+  # deploy/opa/. In PRODUCTION, serve policy as a signed BUNDLE from a remote
+  # bundle server instead of a volume mount (OPA guidance).
+  #
+  # AUTH IS OPT-IN even in local dev, so `make run` works out of the box: the app
+  # only calls OPA when OPA_URL is set (see .env.example, where OPA_URL is
+  # commented and points at this service — http://opa:8181). Enabling
+  # authorisation (OPA) WITHOUT authentication (OIDC) means every request arrives
+  # with no roles and the default-deny policy returns 403, so to exercise the two
+  # layers uncomment BOTH the OIDC_* variables and OPA_URL in .env.
+  opa:
+    image: openpolicyagent/opa:1.9.0-static
+    container_name: app_opa
+    command:
+      - "run"
+      - "--server"
+      - "--addr=0.0.0.0:8181"
+      - "/policies"
+    volumes:
+      - ./deploy/opa:/policies:ro,Z
+    ports:
+      # OPA REST API. Query a decision from the host with, e.g.:
+      #   curl localhost:8181/v1/data/api/authz/allow -d '{"input":{"roles":["admin"]}}'
+      - "8181:8181"
+    healthcheck:
+      # The default opa image is distroless (no shell / curl), so probe the
+      # server's GET /health using OPA's OWN binary via http.send. --fail makes an
+      # unreachable server or a non-200 response exit non-zero.
+      test:
+        - "CMD"
+        - "/opa"
+        - "eval"
+        - "--fail"
+        - 'x := http.send({"method":"GET","url":"http://127.0.0.1:8181/health","raise_error":false}); x.status_code == 200'
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   postgres_data:

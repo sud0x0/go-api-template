@@ -36,6 +36,16 @@ const (
 	ErrTypeNotFound         = "not_found"
 	ErrTypeMethodNotAllowed = "method_not_allowed"
 	ErrTypeRateLimited      = "rate_limited"
+	// ErrTypeUnauthorised and ErrTypeForbidden are emitted by the auth
+	// middleware (internal/middleware), which runs before any feature handler.
+	// Authentication failure (no/invalid Bearer token) is a 401 unauthorised;
+	// authorisation denial (OPA says no) is a 403 forbidden. Like the other
+	// router-level types they carry NO feature label and are NOT recorded on
+	// api_errors_total — that counter is for feature-handler errors, and these
+	// are rejected upstream. http_requests_total still counts them via the
+	// metrics middleware.
+	ErrTypeUnauthorised = "unauthorised"
+	ErrTypeForbidden    = "forbidden"
 )
 
 // WriteJSONError writes the standard error envelope with the given status,

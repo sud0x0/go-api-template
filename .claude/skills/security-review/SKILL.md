@@ -27,7 +27,7 @@ of scope — [`decisions.md` #14](../../rules/decisions.md)). Two documents driv
 - **partial** — satisfied outside the app (edge/deployment) or only in part; note who owns the rest.
 - **gap** — not satisfied; a finding. Cite the offending line and the minimal fix.
 - **n/a** — the change has no surface for this requirement (say why).
-- **deferred with auth** — V6/V7/V9/V10; applicable only once OIDC lands ([`decisions.md` #13](../../rules/decisions.md)).
+- **resource-server auth is implemented** — the two-layer model (OIDC validation + OPA function-level authz) has landed ([`decisions.md` #13/#16–#19](../../rules/decisions.md)). V9 and V10.3/V10.5 are per-requirement `met` rows; the authorization-server / login-flow requirements (V10.1/V10.2/V10.4/V10.6/V10.7, nonce, back-channel logout) and V6/V7 stay `n/a`/`partial` as the adopter IdP's or frontend's responsibility. When reviewing a change to the middleware, walk the V9/V10 rows.
 
 ## The seven rules → the ASVS requirements they implement
 
@@ -39,8 +39,8 @@ rules against the scope, and record the requirement IDs in the output.
 | 1 · Validate / parameterise / encode | 1.2.1, 1.2.3, **1.2.4** (parameterised SQL), 1.5.2, 2.2.1 | No string-built SQL; output via `json.Encoder`; only cleaning is `shared.SanitiseNullBytes`. `grep -rn 'fmt.Sprintf.*SELECT\|+ "SELECT\|Query(.*+' <scope>` → nothing |
 | 2 · Type & validate every input | 2.2.1, 2.2.2, 1.3.3, 1.4.2, 15.3.5 | UUID path params via `uuid.Parse` (400 not 500); `rune_max`/`rune_min`/`rune_len` tags, never stdlib `max`/`min`/`len`. `grep -rn 'uuid.Parse\|rune_max\|rune_min\|rune_len' <scope>` |
 | 3 · Validate DB output too | 15.3.1 | Every row read re-checked via `Model.Validate()`. `grep -rn '\.Validate()' <scope>` in read paths |
-| 4 · Authenticate by default | **8.2.2** (identity boundary), 4.1.3, 14.2.1; V6 deferred (#13) | New routes under `/api/v1`; user ID via `shared.UserIDFromContext` (UUID-enforced 401), set via `shared.WithUserID`. Confirm routes sit inside the `r.Route("/api/v1", …)` block |
-| 5 · Authorise in the repository | **8.2.2, 8.3.1, 8.4.1** | Every query `WHERE … AND user_id = $N`; no row filtering in the handler. `grep -rn 'user_id = \$' <scope>` — one per query |
+| 4 · Authenticate by default | **8.2.2** (identity boundary), 4.1.3, 14.2.1; **V9**, **V10.3/V10.5** (resource-server token validation, #16) | New routes under `/api/v1`; user ID via `shared.UserIDFromContext` (UUID-enforced 401), set by the OIDC middleware via `shared.WithUserID`. Confirm routes sit inside the `r.Route("/api/v1", …)` block so both auth layers apply |
+| 5 · Authorise in the repository | **8.2.2, 8.3.1, 8.4.1**; function-level via OPA is **8.2.1** (#17) | Every query `WHERE … AND user_id = $N` is the ROW-OWNERSHIP layer; no row filtering in the handler. `grep -rn 'user_id = \$' <scope>` — one per query. OPA does FUNCTION-LEVEL authz only — confirm no change pushes row filtering into OPA (the two layers stay separate) |
 | 6 · Validate file uploads | V5 (n/a until an upload exists) | Only if the scope adds uploads: MIME + extension + size, all three |
 | 7 · Errors carry causes; labels bounded | **16.5.1, 16.3.4, 16.4.1** | Repos wrap multi-`%w`; every metric/`error_type`/`path` label is a Go constant / chi pattern — never `err.Error()`, raw SQL, or user strings. `grep -rn 'IncAPIError\|ErrType\|%w: %w' <scope>` |
 

@@ -36,6 +36,7 @@ type Config struct {
 	Log           LogConfig
 	CORS          CORSConfig
 	Observability ObservabilityConfig
+	Auth          AuthConfig
 }
 
 // ServerConfig holds HTTP server configuration.
@@ -112,6 +113,69 @@ type ObservabilityConfig struct {
 	// OTEL_SERVICE_NAME. Defaults to "go-api" to match the logger's service
 	// attribute, so a log line and its trace share one service identity.
 	OTELServiceName string
+}
+
+// AuthConfig holds the two-layer auth model's settings. It is a dedicated
+// struct (parallel to ObservabilityConfig) rather than fields tacked onto
+// ServerConfig because auth spans two distinct subsystems — authentication
+// (OIDC token validation, in-process) and authorisation (OPA sidecar over REST)
+// — and keeping them together localises both the main() wiring and the
+// validate() fail-fast rules to one place.
+//
+// Both layers are OFF by default so the template boots with no IdP and no OPA
+// for local dev. Each derives its Enabled flag from "is its endpoint set",
+// mirroring the OTEL_ENABLED pattern (one variable turns a layer on).
+type AuthConfig struct {
+	OIDC OIDCConfig
+	OPA  OPAConfig
+}
+
+// OIDCConfig holds the resource-server authentication settings. The template is
+// an OAuth2 RESOURCE SERVER: it validates a Bearer access token against the
+// IdP's discovered JWKS. It is NOT an authorization server and NOT a browser
+// OIDC client — the login redirect, code exchange, PKCE, and nonce belong to the
+// adopter's IdP and frontend (see .claude/rules/decisions.md).
+type OIDCConfig struct {
+	// Enabled gates the authentication middleware. When false the middleware is
+	// not registered and /api/v1 runs unauthenticated (logged once at startup),
+	// so the template runs with no IdP for local dev. When OIDC_ENABLED is unset
+	// it defaults to "an issuer is configured", so setting OIDC_ISSUER_URL is
+	// enough to turn auth on with no second flag to remember.
+	Enabled bool
+	// IssuerURL is the OIDC issuer / discovery base from OIDC_ISSUER_URL (e.g.
+	// https://accounts.example.com). go-oidc appends /.well-known/openid-
+	// configuration to it and validates that the discovered issuer matches this
+	// value EXACTLY (ASVS V10.5.3). Empty disables auth.
+	IssuerURL string
+	// Audience is the expected token audience from OIDC_AUDIENCE (typically this
+	// service's client id). It is passed to the verifier as ClientID so the aud
+	// claim is validated (ASVS V9.2.3 / V10.3.1). Required when OIDC is enabled —
+	// an empty audience would force go-oidc's SkipClientIDCheck, which we never do.
+	Audience string
+}
+
+// OPAConfig holds the Open Policy Agent authorisation settings. After
+// authentication, the authz middleware asks an OPA sidecar (over its REST Data
+// API) whether {principal, action, resource} is allowed and enforces the result.
+// This is FUNCTION-LEVEL authorisation only — the repository's WHERE user_id =
+// $N SQL scoping stays as the row-ownership layer (defence in depth).
+type OPAConfig struct {
+	// Enabled gates the authorisation middleware. When false it is not registered
+	// (logged once at startup). When OPA_ENABLED is unset it defaults to "a URL is
+	// configured", mirroring OIDC/OTEL.
+	Enabled bool
+	// URL is the OPA sidecar base URL from OPA_URL (e.g. http://opa:8181). Empty
+	// disables authz.
+	URL string
+	// DecisionPath is the OPA REST Data API path to the boolean decision from
+	// OPA_DECISION_PATH (e.g. v1/data/api/authz/allow). It must match the Rego
+	// package + rule the policy defines. Leading/trailing slashes are trimmed when
+	// the URL is built.
+	DecisionPath string
+	// Timeout bounds the OPA HTTP call. Kept short (default 100ms) because it sits
+	// on every request's hot path: a slow or unreachable OPA must fail closed
+	// quickly, not hang the request. Sourced from OPA_TIMEOUT_MS.
+	Timeout time.Duration
 }
 
 // LoadDatabase reads the DB_* environment variables and returns a validated
@@ -288,6 +352,25 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	// Auth (OIDC + OPA). Both layers default to "enabled if their endpoint is
+	// set" so a single variable turns each on, matching the OTEL_ENABLED pattern.
+	// Left unset (no issuer, no OPA URL) the app boots with auth off for local
+	// dev.
+	oidcIssuer := getEnv("OIDC_ISSUER_URL", "")
+	oidcEnabled, err := getEnvBool("OIDC_ENABLED", oidcIssuer != "")
+	if err != nil {
+		return nil, err
+	}
+	opaURL := getEnv("OPA_URL", "")
+	opaEnabled, err := getEnvBool("OPA_ENABLED", opaURL != "")
+	if err != nil {
+		return nil, err
+	}
+	opaTimeoutMS, err := getEnvInt("OPA_TIMEOUT_MS", 100)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		Server: ServerConfig{
 			Port:              getEnv("PORT", DefaultPort),
@@ -316,6 +399,19 @@ func Load() (*Config, error) {
 			OTELEnabled:          otelEnabled,
 			OTELExporterEndpoint: otelEndpoint,
 			OTELServiceName:      getEnv("OTEL_SERVICE_NAME", "go-api"),
+		},
+		Auth: AuthConfig{
+			OIDC: OIDCConfig{
+				Enabled:   oidcEnabled,
+				IssuerURL: oidcIssuer,
+				Audience:  getEnv("OIDC_AUDIENCE", ""),
+			},
+			OPA: OPAConfig{
+				Enabled:      opaEnabled,
+				URL:          opaURL,
+				DecisionPath: getEnv("OPA_DECISION_PATH", "v1/data/api/authz/allow"),
+				Timeout:      time.Duration(opaTimeoutMS) * time.Millisecond,
+			},
 		},
 	}
 
@@ -374,6 +470,52 @@ func (c *Config) validate() error {
 			"OTEL_ENABLED=true requires OTEL_EXPORTER_OTLP_ENDPOINT to be set " +
 				"(the OTLP Collector endpoint, e.g. http://otel-collector:4318)",
 		)
+	}
+
+	// OIDC authentication, when enabled, needs a discovery issuer AND an audience.
+	// The issuer is where go-oidc fetches the JWKS and is matched exactly; the
+	// audience is passed to the verifier as ClientID so the aud claim is checked
+	// (ASVS V9.2.3 / V10.3.1). We require the audience rather than let it be empty
+	// because an empty ClientID forces go-oidc's SkipClientIDCheck — accepting
+	// tokens minted for any audience — which this template never does.
+	if c.Auth.OIDC.Enabled {
+		if c.Auth.OIDC.IssuerURL == "" {
+			return fmt.Errorf(
+				"OIDC_ENABLED=true requires OIDC_ISSUER_URL to be set " +
+					"(the OIDC issuer / discovery base, e.g. https://accounts.example.com)",
+			)
+		}
+		if c.Auth.OIDC.Audience == "" {
+			return fmt.Errorf(
+				"OIDC_ENABLED=true requires OIDC_AUDIENCE to be set " +
+					"(the expected token audience / client id; an empty audience would disable aud validation)",
+			)
+		}
+	}
+
+	// OPA authorisation, when enabled, needs a sidecar URL and a bounded timeout.
+	// The timeout sits on every request's hot path, so a zero or absurd value is a
+	// misconfiguration: fail fast rather than hang or spin. 60s is a generous
+	// upper bound — a real OPA answers in single-digit milliseconds.
+	if c.Auth.OPA.Enabled {
+		if c.Auth.OPA.URL == "" {
+			return fmt.Errorf(
+				"OPA_ENABLED=true requires OPA_URL to be set " +
+					"(the OPA sidecar base URL, e.g. http://opa:8181)",
+			)
+		}
+		if c.Auth.OPA.DecisionPath == "" {
+			return fmt.Errorf(
+				"OPA_ENABLED=true requires OPA_DECISION_PATH to be set " +
+					"(the REST Data API path to the boolean decision, e.g. v1/data/api/authz/allow)",
+			)
+		}
+		if c.Auth.OPA.Timeout <= 0 || c.Auth.OPA.Timeout > 60*time.Second {
+			return fmt.Errorf(
+				"OPA_TIMEOUT_MS must be in (0, 60000], got %d ms",
+				c.Auth.OPA.Timeout.Milliseconds(),
+			)
+		}
 	}
 
 	return nil

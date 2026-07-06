@@ -15,9 +15,12 @@ is committed under [`references/`](.) as the upstream source, with
 mapped area **updates its rows AND their test evidence in the same change**. A stale row is a bug —
 the same class of defect as a stale comment. **A `met` row without a value in the Test evidence
 column is invalid**: a `met` status is a claim, and an unverified claim can silently regress, so a
-`met` control with no test naming it is demoted to `met-untested` and listed under Gaps. When
-authentication (OIDC) lands, chapters V6/V7/V9/V10 move from *deferred* to per-requirement rows in
-the same change (see [`decisions.md` #13](../../../rules/decisions.md)).
+`met` control with no test naming it is demoted to `met-untested` and listed under Gaps. The
+two-layer auth model has landed (see [`decisions.md` #13/#16–#19](../../../rules/decisions.md)), so
+chapters **V9** and **V10.3/V10.5** now have per-requirement `met` rows (resource-server token
+validation and identity), while the authorization-server / login-flow requirements
+(V10.1/V10.2/V10.4/V10.6/V10.7, nonce, back-channel logout) are honest `n/a` rows with the
+adopter-IdP/frontend reason, and V6/V7 are IdP-owned.
 
 **Status vocabulary:** `met` (a template control satisfies it, cited, **with a named test in the
 Test evidence column**) · `met-untested` (met in code but no test proves it — a finding; the
@@ -111,9 +114,9 @@ subset does apply and gets rows.
 
 | ID | Requirement (paraphrased) | L | Status | Control / file | Test evidence |
 |----|---------------------------|---|--------|----------------|----------------|
-| 8.1.1 | Docs define function-level and data-specific access rules based on permissions/attributes | 1 | partial | Data-specific (row-ownership) rules documented — `security.md` rule 5, `decisions.md` #10/#13; function-level/role rules absent (deferred with auth, no RBAC in template) | — |
-| 8.1.2 | Docs define field-level (read/write) access restrictions | 2 | n/a | No field-level authorization; requires roles/permissions deferred with auth (`decisions.md` #13) | — |
-| 8.2.1 | Function-level access restricted to consumers with explicit permissions | 1 | n/a | No roles/permissions; authenticated principal + RBAC deferred with auth (`decisions.md` #13) | — |
+| 8.1.1 | Docs define function-level and data-specific access rules based on permissions/attributes | 1 | met | BOTH layers documented: function-level role rules in the OPA policy (`deploy/opa/policy.rego`, `decisions.md` #17) and data-specific row-ownership rules in `security.md` rule 5 / `decisions.md` #10 | `policy_test.rego` (allow/deny cases) |
+| 8.1.2 | Docs define field-level (read/write) access restrictions | 2 | n/a | No field-level authorization; OPA authorises at function level, not per field (`decisions.md` #17) | — |
+| 8.2.1 | Function-level access restricted to consumers with explicit permissions | 1 | met | OPA sidecar authorises `{subject, roles, action, resource}` fail-closed before the handler runs (`internal/middleware/authz_middleware.go`, `deploy/opa/policy.rego`) | `TestOPAAuth_FailsClosed`, `TestOPAAuth_AllowsOnlyOnExplicitTrue`, `policy_test.rego` |
 | 8.2.2 | Data-specific access restricted per-consumer (mitigate IDOR/BOLA) | 1 | met | Every query is `WHERE … AND user_id = $N` — `internal/userlog/userlog_repository.go`; identity boundary at `internal/shared/identity.go` (UUID-enforced, 401 on bad subject) | `TestLogRepository_CrossUserIsolation_Integration`, `TestHandler_NonUUIDUserReturns401`, `TestUserIDFromContext_RejectsNonUUID` |
 | 8.2.3 | Field-level access restricted per-consumer (mitigate BOPLA) | 2 | n/a | No per-field authorization; deferred with auth (`decisions.md` #13) | — |
 | 8.3.1 | Enforce authorization at a trusted service layer, not client-manipulable controls | 1 | met | Row-ownership enforced server-side in the repository SQL, not the handler — `internal/userlog/userlog_repository.go`; `security.md` rule 5 | `TestLogRepository_CrossUserIsolation_Integration` |
@@ -219,9 +222,9 @@ correct deployment, not enforced by the app.
 | 16.2.2 | Time sources synchronized; timestamps UTC or explicit offset | 2 | partial | RFC3339 timestamps carry explicit tz offset (`internal/shared/logger/logger.go`); host clock/NTP is deployment/infra | — |
 | 16.2.3 | App stores/broadcasts logs only to inventoried files/services | 2 | n/a | App writes structured JSON to stdout; collection/routing owned by edge/infra | — |
 | 16.2.4 | Logs readable and correlatable, ideally a common format | 2 | met | `slog.NewJSONHandler` emits structured JSON with a request_id correlation field (`internal/shared/logger/logger.go`, `internal/middleware/request_logger.go`) | `TestSlogLogger_BaseAttrsOnEveryLine`, `TestRequestLogger_BindsRequestContextAndLogsCompletion` |
-| 16.2.5 | Enforce logging rules by data-protection level (never log credentials; mask tokens) | 2 | partial | No credentials/tokens yet (auth deferred); user text bounded by `shared.LogMaxChars` and cleaned via `shared.SanitiseNullBytes`, but no formal masking framework for future sensitive fields | — |
-| 16.3.1 | Log all authentication operations, successful and failed | 2 | n/a | Auth intentionally not implemented — only the contract ships (`decisions.md` #13); no auth events to log | — |
-| 16.3.2 | Log failed authorization attempts | 2 | partial | Row-ownership authz enforced by `WHERE … AND user_id = $N`; cross-user access yields empty/not-found through `handleError`, but no distinct "authorization denied" security event | — |
+| 16.2.5 | Enforce logging rules by data-protection level (never log credentials; mask tokens) | 2 | partial | The auth middleware deliberately never logs the bearer token — a verification failure logs the error at debug WITHOUT the token (`internal/middleware/auth_middleware.go`); user text bounded by `shared.LogMaxChars` and cleaned via `shared.SanitiseNullBytes`, but no formal masking framework for other sensitive fields | — |
+| 16.3.1 | Log all authentication operations, successful and failed | 2 | partial | Failed token verification is logged at debug (without the token) by the auth middleware (`internal/middleware/auth_middleware.go`); successful authentication is not separately logged (the completed-request line carries the request), and there is no dedicated audit stream | — |
+| 16.3.2 | Log failed authorization attempts | 2 | partial | An OPA deny logs a WARN "authorisation denied" with the bounded resource + action (`internal/middleware/authz_middleware.go`); row-ownership denials still surface as empty/not-found through `handleError` with no distinct security event | — |
 | 16.3.3 | Log defined security events / control-bypass attempts | 2 | partial | Validation/decode failures and rate-limit hits flow through `handleError` (counted on `api_errors_total`, logged), but recorded as generic errors, not tagged security-bypass events (`internal/userlog/userlog_handler.go`) | — |
 | 16.3.4 | Log unexpected errors and security-control failures | 2 | met | `handleError` logs the real cause and increments `api_errors_total{feature,error_type}`; DB failures wrapped multi-`%w` (`internal/userlog/userlog_handler.go`, `internal/shared/logger/logger.go`) | `TestRepositoryPreservesUnderlyingError`, `TestHandleError_EveryErrTypeHasACase` |
 | 16.4.1 | All logging components encode data to prevent log injection | 2 | met-untested | `slog.NewJSONHandler` JSON-escapes all string values; `shared.SanitiseNullBytes` strips NUL (`internal/shared/logger/logger.go`, `internal/shared/validation.go`) | **none (untested)** |
@@ -233,15 +236,64 @@ correct deployment, not enforced by the app.
 
 ---
 
+## V9 Self-contained Tokens
+
+The template is an OAuth2 **resource server**: it validates the bearer access token it is handed
+(`internal/middleware/auth_middleware.go`, via `coreos/go-oidc`). It does not ISSUE tokens — issuance
+is the adopter IdP's. These rows cover the validation side; each control is cited by ID in the
+middleware source.
+
+| ID | Requirement (paraphrased) | L | Status | Control / file | Test evidence |
+|----|---------------------------|---|--------|----------------|----------------|
+| 9.1.1 | Validate the token's signature/MAC before trusting its contents | 1 | met | go-oidc verifies the JWT signature against the discovered JWKS before any claim is read (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (bad signature) |
+| 9.1.2 | Algorithm allowlist for token verification; never `None` | 1 | met | Explicit asymmetric-only allowlist `authAllowedSigningAlgs` (RS256, ES256); `none` is never on it (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (none alg) |
+| 9.1.3 | Key material only from trusted pre-configured sources; reject token-supplied `jku`/`x5u`/`jwk` | 1 | met | go-oidc's `RemoteKeySet` fetches keys only from the discovery `jwks_uri`; token header key sources are never honoured (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (bad signature — a key outside the trusted set cannot verify) |
+| 9.2.1 | Accept the token only within its validity window (`exp`/`nbf`) | 1 | met | go-oidc rejects expired/not-yet-valid tokens (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (expired) |
+| 9.2.2 | Validate token TYPE / purpose; only accept access tokens for authorization | 2 | met | `token_use=="id"` rejected; documented assumption for issuers without a token-use claim (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsIDToken` |
+| 9.2.3 | Accept only tokens whose audience is this service (`aud`) | 2 | met | Verifier `ClientID` = `OIDC_AUDIENCE`; go-oidc validates `aud` (`internal/middleware/auth_middleware.go`, `internal/config/config.go`) | `TestOIDCAuth_RejectsWith401` (wrong audience) |
+| 9.2.4 | If the issuer reuses a key across audiences, tokens carry a unique audience restriction | 2 | n/a | Token-ISSUER responsibility (adopter IdP), not the resource server; the RS validates `aud` at 9.2.3 | — |
+
+---
+
+## V10 OAuth and OIDC
+
+The resource-server requirements (**V10.3**, and the identity parts of **V10.5**) are `met` with the
+middleware and its tests. The authorization-SERVER requirements (**V10.4**, **V10.6**), the
+browser/login-flow client requirements (**V10.1**, **V10.2**, **V10.5.1** nonce, **V10.5.5**
+back-channel logout), and **V10.7** consent are `n/a`: the template does not run the login flow (see
+`decisions.md` #16/#19). No row here claims an authorization-server control the template does not
+implement.
+
+| ID | Requirement (paraphrased) | L | Status | Control / file | Test evidence |
+|----|---------------------------|---|--------|----------------|----------------|
+| 10.1.1 | Tokens sent only to components that need them (e.g. BFF keeps access/refresh in the backend) | 2 | n/a | OIDC client/frontend responsibility; the RS receives tokens, it does not distribute them. Browser forks warned off `localStorage` (README) | — |
+| 10.1.2 | Client accepts AS values only from a same-session transaction (PKCE `code_verifier`, `state`, `nonce`) | 2 | n/a | Login-flow (OIDC client) responsibility; the RS runs no authorization request | — |
+| 10.2.1 | OAuth client CSRF defence via PKCE or `state` | 2 | n/a | OAuth client responsibility (login flow); not run by the RS | — |
+| 10.2.2 | OAuth client mix-up defence (validate `iss`) | 2 | n/a | OAuth client responsibility (login flow); not run by the RS | — |
+| 10.2.3 | OAuth client requests only the required scopes | 3 | n/a | L3 (above the L2 bar) and an OAuth client responsibility | — |
+| 10.3.1 | Resource server accepts only tokens intended for it (audience) | 2 | met | Verifier `ClientID` = `OIDC_AUDIENCE` (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (wrong audience) |
+| 10.3.2 | Resource server enforces authorization from token claims (`sub`, `scope`, …) | 2 | met | Subject + roles (mapped from claims) form the OPA input; the decision is enforced fail-closed (`internal/middleware/authz_middleware.go`) | `TestOPAAuth_BuildsBoundedInput`, `TestOPAAuth_FailsClosed` |
+| 10.3.3 | Identify the user from non-reassignable claims (typically `iss`+`sub`) | 2 | met | `MapSubjectToUUID(iss, sub)` — never a mutable claim like email (`internal/middleware/auth_middleware.go`) | `TestMapSubjectToUUID`, `TestOIDCAuth_ValidToken_SetsMappedUUID` |
+| 10.3.4 | If specific auth strength/recentness is required, verify `acr`/`amr`/`auth_time` | 2 | n/a | The template imposes no step-up / auth-strength requirement; add `acr`/`amr`/`auth_time` checks in the middleware if a deployment needs one | — |
+| 10.3.5 | Prevent stolen/replayed access tokens via sender-constrained tokens (mTLS/DPoP) | 3 | n/a | L3 (above the L2 bar); sender-constrained tokens are a deployment/IdP choice | — |
+| 10.4.1–10.4.16 | OAuth Authorization Server controls (redirect-URI allowlist, code single-use, PKCE required, refresh rotation, client auth, …) | 1–3 | n/a | Authorization SERVER (adopter IdP) responsibility; the template is a resource server (`decisions.md` #16/#19) | — |
+| 10.5.1 | OIDC client mitigates ID-token replay via `nonce` | 2 | n/a | Login-flow (OIDC client) responsibility; the RS runs no authentication request, so there is no `nonce` to bind | — |
+| 10.5.2 | Uniquely identify the user from a non-reassignable `sub` | 2 | met | `MapSubjectToUUID(iss, sub)` derives a stable internal UUID (`internal/middleware/auth_middleware.go`) | `TestMapSubjectToUUID` |
+| 10.5.3 | Reject AS metadata whose issuer does not EXACTLY match the pre-configured issuer | 2 | met | `oidc.NewProvider` enforces exact issuer match; `oidc.InsecureIssuerURLContext` is deliberately not used (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_DiscoveryIssuerMismatchRejected` |
+| 10.5.4 | Validate the token audience equals this client's id | 2 | met | Same `aud`-vs-`OIDC_AUDIENCE` check as 10.3.1 (`internal/middleware/auth_middleware.go`) | `TestOIDCAuth_RejectsWith401` (wrong audience) |
+| 10.5.5 | OIDC back-channel logout: validate `logout+jwt` typing, `events`, no `nonce` | 2 | n/a | Back-channel logout not implemented; logout is a client/IdP flow, not a resource-server surface | — |
+| 10.6.1–10.6.2 | OpenID Provider controls (response modes, forced-logout DoS) | 2 | n/a | OpenID PROVIDER (adopter IdP) responsibility; the template is not an OP | — |
+| 10.7.1–10.7.3 | Consent management (prompt, information, review/revoke) | 2 | n/a | Authorization server / consent-UI responsibility; not a resource-server surface | — |
+
+---
+
 ## Chapter-level (no per-requirement rows)
 
 | Chapter | Level of assessment | Reason |
 |---------|---------------------|--------|
 | V5 File Handling | n/a | No file-upload endpoint exists, so file-handling controls (security.md rule 6: MIME + extension + size) have no surface — becomes applicable when an adopter adds an upload endpoint, and this map gains rows then. |
-| V6 Authentication | deferred with auth | Authentication (OIDC) is intentionally not implemented (`decisions.md` #13); only the seam ships (`shared.WithUserID`/`UserIDFromContext`, wired at `r.Route("/api/v1", …)`) — becomes applicable when OIDC lands, and this map must expand to per-requirement rows then. |
-| V7 Session Management | deferred with auth | No session mechanism exists because auth is intentionally unimplemented (`decisions.md` #13, seam only) — becomes applicable when OIDC lands; expand to per-requirement rows then. |
-| V9 Self-contained Tokens | deferred with auth | The template issues/validates no self-contained tokens (JWT/SAML); auth is deferred to the adopter's IdP (`decisions.md` #13) — becomes applicable when OIDC lands; expand to per-requirement rows then. |
-| V10 OAuth and OIDC | deferred with auth | OAuth/OIDC is exactly the mechanism left to the adopter under `decisions.md` #13 (only the `WithUserID`/`UserIDFromContext` seam ships) — becomes applicable when OIDC lands; expand to per-requirement rows then. |
+| V6 Authentication | partial (IdP-owned) | The app is a RESOURCE SERVER (`decisions.md` #13/#16): it VALIDATES bearer access tokens (see V9 and V10.3 below) but runs no login, credential store, MFA, or recovery flow — those are the adopter IdP's. Password/MFA/recovery requirements have no surface here; the token-validation slice is covered by the per-requirement V9 and V10.3 rows. |
+| V7 Session Management | n/a (IdP-owned, stateless RS) | The resource server holds no session: each request is authorised solely by its bearer token (`internal/middleware/auth_middleware.go`), there is no cookie, session store, or logout. Session lifecycle is the authorization server / client responsibility. |
 | V17 WebRTC | n/a | The template exposes only a JSON REST API with no real-time/WebRTC media, so no control has any surface. |
 
 ---

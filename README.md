@@ -19,7 +19,7 @@ The rest of this file is reference material. The [Quick start](#quick-start) get
 3.  [Forking the template](#forking-the-template)
 4.  [Configuration](#configuration)
 5.  [Adding a feature](#adding-a-feature)
-6.  [Authentication](#authentication)
+6.  [Authentication and Authorisation](#authentication-and-authorisation)
 7.  [Database](#database)
 8.  [Pagination](#pagination)
 9.  [Migrations](#migrations)
@@ -203,44 +203,49 @@ Then:
 
 ---
 
-## Authentication
+## Authentication and Authorisation
 
-Authentication is **deliberately not implemented** in this template — the contract is. Any middleware that validates a token and sets the user ID in the request context will work.
+The template ships a **two-layer** auth model, both layers **disabled by default** so `make run` works with no IdP for local dev. Set the relevant environment variables to turn each on.
 
-### Contract
+The app is an **OAuth2 resource server**. It receives a Bearer access token in the `Authorization` header, validates it, and enforces access. It does **not** run the login redirect, authorization-code exchange, PKCE, or the `nonce` flow. Those belong to your IdP and frontend. A resource server only validates the token it is handed.
 
-| Item             | Where                                                                                              |
-| ---------------- | -------------------------------------------------------------------------------------------------- |
-| Context key      | `shared.WithUserID(ctx, id)` / `shared.UserIDFromContext(ctx)` (key lives in `internal/shared`)    |
-| User ID format   | **Must be a UUID.** `UserIDFromContext` canonicalises it and rejects non-UUIDs as 401 (see below). |
-| Repository scope | Every query already has `WHERE … AND user_id = $N`                                                 |
-| Wire point       | The `r.Route("/api/v1", …)` block in `cmd/api/main.go`                                             |
-| 401 response     | `shared.WriteUnauthorised(w, errorType, message)` (JSON envelope + `WWW-Authenticate`)             |
-| Metric on 401    | `api_errors_total{feature="log",error_type="unauthorised"}` (automatic)                            |
+### Layer 1: Authentication (OIDC)
 
-> **UUIDs only.** The `user_id` column is `UUID NOT NULL`, so `shared.UserIDFromContext` is the single enforcement point: it parses the stored value, returns the canonical lowercase UUID, and reports `ok=false` (→ 401) for anything that is not a UUID — keeping a non-UUID subject from reaching a query and surfacing as a confusing 500 (`error_type="database"`). If your IdP's `sub` is **not** a UUID (e.g. `auth0|12345`, an email, a numeric id), map it to an internal UUID in your middleware (a `sub → uuid` lookup table) **before** calling `shared.WithUserID`. `WithUserID` itself is a plain setter — validation lives only at the read point so it can't be bypassed by a second writer.
+On startup the middleware does OIDC discovery against `OIDC_ISSUER_URL` and builds a [`coreos/go-oidc`](https://github.com/coreos/go-oidc) verifier once. Per request it takes the `Authorization: Bearer <token>` header and verifies the token against the IdP's discovered JWKS. It rejects a missing or invalid token with a 401 in the JSON envelope and a `WWW-Authenticate: Bearer` header.
 
-### Implementing
+What the verifier enforces (each cited by ASVS ID in [`auth_middleware.go`](internal/middleware/auth_middleware.go)): signature valid against the discovered keys, an explicit algorithm allowlist (RS256 and ES256, never `none`), key material only from the trusted JWKS (a token-supplied `jku`/`x5u`/`jwk` is ignored), `exp`/`nbf` validity, audience checked against `OIDC_AUDIENCE`, and the user identified from `iss` plus `sub` (never a mutable claim like email). The issuer must match `OIDC_ISSUER_URL` exactly. `oidc.InsecureIssuerURLContext` is not used.
 
-```go
-r.Route("/api/v1", func(r chi.Router) {
-    r.Use(authMiddleware.Handler) // ← your token validator
+**Internal UUID mapping.** The `user_id` column is `UUID NOT NULL`, but an IdP `sub` is often not a UUID (`auth0|12345`, an email, a numeric id). The middleware derives the internal id deterministically as `UUIDv5(fixed-namespace, iss|sub)`, so the same identity always maps to the same UUID with no lookup table. A real deployment may instead keep a `users` table mapping `(iss, sub)` to an internal id and resolve it in the middleware before `shared.WithUserID`. Either way `shared.UserIDFromContext` enforces the UUID shape at the single read point.
 
-    r.Get("/logs", logHandler.ListLogs)
-    // …
-})
+### Layer 2: Authorisation (OPA)
 
-// Inside your middleware:
-ctx := shared.WithUserID(r.Context(), userID)
-next.ServeHTTP(w, r.WithContext(ctx))
-```
+After authentication, the second middleware asks an [Open Policy Agent](https://www.openpolicyagent.org/) (OPA) sidecar over its REST Data API whether the request is allowed. It POSTs `{"input": {subject, roles, action, resource, method}}` to `OPA_URL` + `OPA_DECISION_PATH` and enforces the boolean result. `resource` is the chi route pattern (for example `/api/v1/logs/{id}`), never the raw path, so the policy input stays bounded.
 
-Recommended libraries:
+This is **function-level** authorisation only. It answers "may this role call this endpoint". It does **not** replace the repository's `WHERE user_id = $N` SQL scoping, which stays as the **row-ownership** layer answering "may this user see this row". The two layers are deliberately separate. Do not push row filtering into OPA.
 
-- [`coreos/go-oidc`](https://github.com/coreos/go-oidc) for OIDC + token verification
-- [`golang.org/x/oauth2`](https://pkg.go.dev/golang.org/x/oauth2) for OAuth 2.0 clients
+**Fail closed.** Any error (timeout, non-200, malformed body, missing result) denies with a 403. Only an explicit `result == true` allows.
 
-JWT claim checks (validate every one): `iss`, `aud`, `exp`, `nbf`, `kid`, and `alg` (server-side whitelist — never trust the token header). See the [OWASP JWT cheat sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html).
+**Vendor-agnostic by mapping.** IdP role and group claims are mapped to internal role names at the auth boundary (`mapClaimsToRoles` in the authentication middleware). The starter policy ([`deploy/opa/policy.rego`](deploy/opa/policy.rego)) is written against internal roles like `admin` and `user`, so the IdP and the policy are independently swappable. The policy is bind-mounted for local dev. In production, serve it as a signed bundle from a remote bundle server. OPA runs as a **separate process** (a sidecar), mirroring the OTel Collector deployment style, never inside the app image.
+
+### Configuration
+
+| Variable            | Layer | Default                     | Meaning                                                              |
+| ------------------- | ----- | --------------------------- | ------------------------------------------------------------------- |
+| `OIDC_ISSUER_URL`   | authn | unset (authn off)           | OIDC issuer / discovery base. Setting it enables authentication.    |
+| `OIDC_AUDIENCE`     | authn | unset                       | Expected token audience. Required when authentication is enabled.   |
+| `OIDC_ENABLED`      | authn | derived from issuer set     | Explicit on/off override.                                           |
+| `OPA_URL`           | authz | unset (authz off)           | OPA sidecar base URL. Setting it enables authorisation.             |
+| `OPA_DECISION_PATH` | authz | `v1/data/api/authz/allow`   | REST Data API path to the boolean allow decision.                   |
+| `OPA_TIMEOUT_MS`    | authz | `100`                       | OPA call timeout in ms. Bounded to `(0, 60000]`. Fails closed fast. |
+| `OPA_ENABLED`       | authz | derived from URL set        | Explicit on/off override.                                           |
+
+The contract seam is unchanged: auth middleware stores the internal UUID via `shared.WithUserID(ctx, id)`, and handlers read it via `shared.UserIDFromContext(ctx)`. The key lives in `internal/shared` so infrastructure middleware never imports a feature package. To swap in your own auth, replace the middleware wired at the `r.Route("/api/v1", …)` block in `cmd/api/main.go`.
+
+> **Browser forks: do not store tokens in `localStorage`.** It is readable by any script on the page, so an XSS turns into token theft. Prefer a same-site, `HttpOnly` cookie set by a backend-for-frontend, or in-memory storage. See the [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage). This is a client concern. The resource server takes no position beyond this note.
+
+### What is out of scope
+
+The login redirect, authorization-code exchange, PKCE, `state`/`nonce`, redirect-URI registration, refresh-token rotation, consent, and back-channel logout are **not** implemented. They are authorization-server and browser-client concerns owned by your IdP and frontend, not the resource server.
 
 ---
 
