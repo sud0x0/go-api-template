@@ -11,7 +11,7 @@ import (
 )
 
 // Cursor format: base64url(<RFC3339Nano date_and_time>|<uuid id>) of the last
-// row of a page. It is OPAQUE to clients — they echo it back verbatim as the
+// row of a page. It is OPAQUE to clients; they echo it back verbatim as the
 // `cursor` query parameter to fetch the next page. The two parts are the keyset
 // sort key (date_and_time, id) that the cursor query resumes after.
 
@@ -24,7 +24,7 @@ func encodeCursor(dateAndTime time.Time, id string) string {
 }
 
 // decodeCursor validates and decodes a client-supplied cursor into its keyset
-// components. BOTH parts are validated strictly — the timestamp via
+// components. BOTH parts are validated strictly: the timestamp via
 // RFC3339Nano, the id via uuid.Parse (then canonicalised to the bare lowercase
 // form Postgres' uuid type accepts). Any malformed input returns
 // shared.ErrInvalidPagination, which the handler maps to 400.
@@ -34,7 +34,7 @@ func encodeCursor(dateAndTime time.Time, id string) string {
 // scoped by `WHERE user_id = $1`; the worst a forged cursor can do is select a
 // different point in the CALLER'S OWN data. Strict validation exists only to
 // keep a cast-error 500 (a non-UUID or non-timestamp reaching Postgres) and
-// pathological values out of SQL — never let cursor contents reach the query
+// pathological values out of SQL. Never let cursor contents reach the query
 // unvalidated.
 func decodeCursor(raw string) (time.Time, string, error) {
 	decoded, err := base64.RawURLEncoding.DecodeString(raw)

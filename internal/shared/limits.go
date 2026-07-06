@@ -7,8 +7,8 @@ const LogMaxChars = 10000 // ~2,000 words, measured in runes not bytes
 
 // MaxBatchSize is the maximum number of items accepted by a batch-create
 // request. It bounds the size of a single atomic transaction (one round-trip
-// per item inside the tx) so a client cannot hold a transaction — and its row
-// locks — open arbitrarily long. The OpenAPI spec documents the same value
+// per item inside the tx) so a client cannot hold a transaction (and its row
+// locks) open arbitrarily long. The OpenAPI spec documents the same value
 // (asserted by the contract test in internal/contract).
 const MaxBatchSize = 100
 

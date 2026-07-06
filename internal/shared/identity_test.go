@@ -34,7 +34,7 @@ func TestUserIDFromContext_CanonicalisesValidUUID(t *testing.T) {
 }
 
 // TestUserIDFromContext_RejectsNonUUID verifies non-UUID subjects (the shapes an
-// external IdP might hand through without mapping) are rejected — these must
+// external IdP might hand through without mapping) are rejected. These must
 // surface as 401 at the handler, never as a Postgres cast-error 500.
 func TestUserIDFromContext_RejectsNonUUID(t *testing.T) {
 	for _, bad := range []string{

@@ -23,7 +23,7 @@ import (
 // network and NO live IdP: the verifier is built from an in-memory RSA key via
 // oidc.StaticKeySet + oidc.NewVerifier, exactly as go-oidc documents for
 // testing. That is why OIDCAuthenticator depends on the tokenVerifier interface
-// rather than the concrete *oidc.IDTokenVerifier — the production verifier and
+// rather than the concrete *oidc.IDTokenVerifier: the production verifier and
 // the test verifier are the same shape.
 
 const (
@@ -326,7 +326,7 @@ func equalRoles(got, want []string) bool {
 }
 
 // NewOIDCAuthenticator must reject a discovery document whose issuer does not
-// EXACTLY match the configured issuer (ASVS V10.5.3) — a malicious or
+// EXACTLY match the configured issuer (ASVS V10.5.3): a malicious or
 // mis-configured authorization server cannot impersonate another by returning a
 // different issuer in its metadata. This also exercises the real discovery path.
 func TestOIDCAuth_DiscoveryIssuerMismatchRejected(t *testing.T) {

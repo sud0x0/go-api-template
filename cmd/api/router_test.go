@@ -17,7 +17,7 @@ import (
 
 // newTestPublicRouter assembles a public router with the same envelope
 // fallbacks main() wires (registerEnvelopeFallbacks) plus a couple of the cheap
-// middlewares from the real stack, and one sample route that only accepts GET —
+// middlewares from the real stack, and one sample route that only accepts GET,
 // so a wrong-method request to it yields a 405.
 func newTestPublicRouter() chi.Router {
 	r := chi.NewRouter()
@@ -93,7 +93,7 @@ func TestPublicRouter_RateLimiterExemptsHealth(t *testing.T) {
 
 	r := chi.NewRouter()
 	registerEnvelopeFallbacks(r)
-	// Health endpoint on the root router — OUTSIDE the limited group.
+	// Health endpoint on the root router, OUTSIDE the limited group.
 	r.Get("/livez", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	// Business routes inside the limited group, mirroring main()'s wiring.
 	r.Group(func(r chi.Router) {

@@ -72,7 +72,7 @@ func TestRequestLogger_BindsRequestContextAndLogsCompletion(t *testing.T) {
 	defer cap.mu.Unlock()
 
 	if !cap.boundCalled {
-		t.Fatal("WithRequestContext was not called — middleware did not wrap the logger")
+		t.Fatal("WithRequestContext was not called: middleware did not wrap the logger")
 	}
 	if cap.boundCtx.RequestID == "" {
 		t.Error("RequestID was not bound")
@@ -88,7 +88,7 @@ func TestRequestLogger_BindsRequestContextAndLogsCompletion(t *testing.T) {
 	}
 
 	if len(cap.infoCalls) == 0 {
-		t.Fatal("no LogInfo calls recorded — expected at least 'request completed'")
+		t.Fatal("no LogInfo calls recorded: expected at least 'request completed'")
 	}
 	found := false
 	for _, ic := range cap.infoCalls {
@@ -108,7 +108,7 @@ func TestRequestLogger_BindsRequestContextAndLogsCompletion(t *testing.T) {
 // TestRequestLogger_RequestCompletedDoesNotRepeatBoundAttrs verifies the
 // optimisation: the "request completed" line should NOT pass method,
 // path, or ip as args (they are already bound on the logger). Only
-// status and duration_ms — values only known at the end.
+// status and duration_ms, values only known at the end.
 func TestRequestLogger_RequestCompletedDoesNotRepeatBoundAttrs(t *testing.T) {
 	cap := &captureLogger{}
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -142,7 +142,7 @@ func TestRequestLogger_RequestCompletedDoesNotRepeatBoundAttrs(t *testing.T) {
 			continue
 		}
 		if !wantKeys[key] {
-			t.Errorf("unexpected key %q in 'request completed' line — should be bound on the logger, not repeated as an arg", key)
+			t.Errorf("unexpected key %q in 'request completed' line: should be bound on the logger, not repeated as an arg", key)
 		}
 	}
 }

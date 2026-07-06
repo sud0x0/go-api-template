@@ -8,7 +8,7 @@
 // bound onto the underlying *slog.Logger via slog's idiomatic .With()
 // inside WithRequestContext. Every subsequent LogError / LogInfo /
 // LogDebug call automatically emits them, so a single line is enough to
-// identify the request, the route, and the client — incident response
+// identify the request, the route, and the client: incident response
 // is one log query, not two.
 package logger
 
@@ -28,7 +28,7 @@ type contextKey string
 const LoggerContextKey contextKey = "logger"
 
 // RequestContext is the per-request information bound onto a logger via
-// WithRequestContext. Empty fields are omitted from the output — so a
+// WithRequestContext. Empty fields are omitted from the output, so a
 // pre-auth call site can leave UserID blank and a non-HTTP caller can
 // leave everything but RequestID blank.
 type RequestContext struct {
@@ -85,10 +85,10 @@ type SlogLogger struct {
 // GoReleaser populates via -ldflags at build time.
 //
 // Log levels:
-//   - "development" / "dev"   — shows all logs including debug
-//   - "production"  / "prod"  — shows info, warnings, and errors
-//   - "quiet"                 — shows only warnings and errors
-//   - "silent"   / "errors"   — shows only errors
+//   - "development" / "dev"   : shows all logs including debug
+//   - "production"  / "prod"  : shows info, warnings, and errors
+//   - "quiet"                 : shows only warnings and errors
+//   - "silent"   / "errors"   : shows only errors
 func NewLogger(logLevel, serviceName string) Logger {
 	return newSlogLogger(serviceName, slogHandlerForLevel(logLevel, os.Stdout))
 }
@@ -97,7 +97,7 @@ func NewLogger(logLevel, serviceName string) Logger {
 // tests use to swap the underlying handler for one backed by a
 // bytes.Buffer so they can inspect the emitted JSON directly.
 //
-// It deliberately does NOT call slog.SetDefault — a constructor must not mutate
+// It deliberately does NOT call slog.SetDefault: a constructor must not mutate
 // global state. main installs the default once via SetDefaultSlog.
 func newSlogLogger(serviceName string, h slog.Handler) Logger {
 	handler := h.WithAttrs([]slog.Attr{
@@ -111,7 +111,7 @@ func newSlogLogger(serviceName string, h slog.Handler) Logger {
 
 // SetDefaultSlog installs l as slog's process-wide default (slog.SetDefault) so
 // third-party code that logs through the slog package default routes through our
-// handler. Call this exactly once from main, after constructing the app logger —
+// handler. Call this exactly once from main, after constructing the app logger;
 // constructors intentionally do not mutate this global. A non-SlogLogger
 // implementation (e.g. a test fake) is a no-op.
 func SetDefaultSlog(l Logger) {
@@ -152,7 +152,7 @@ func slogHandlerForLevel(logLevel string, w *os.File) slog.Handler {
 
 // WithRequestContext returns a new logger with the per-request
 // attributes pre-bound onto every emitted log line. Empty fields are
-// not added — slog would otherwise emit them as empty strings, which
+// not added: slog would otherwise emit them as empty strings, which
 // pollutes the log shape.
 func (l *SlogLogger) WithRequestContext(rc RequestContext) Logger {
 	var attrs []any
@@ -196,7 +196,7 @@ func (l *SlogLogger) LogError(simplifiedError error, actualError error) {
 }
 
 // LogWarn emits a warning event with optional key-value attributes. It is the
-// level an operator selects ("quiet") to see warnings AND errors but not info —
+// level an operator selects ("quiet") to see warnings AND errors but not info,
 // so warnings must be emittable at warn level, not faked as info (which "quiet"
 // drops).
 func (l *SlogLogger) LogWarn(message string, args ...any) {

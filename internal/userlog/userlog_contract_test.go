@@ -20,7 +20,7 @@ import (
 //
 // It is table-driven with one representative wrapped error per sentinel.
 // Adding a new ErrType* constant without wiring a handleError case (or without
-// adding it here) fails this test — the completeness check below asserts the
+// adding it here) fails this test; the completeness check below asserts the
 // table covers every constant.
 func TestHandleError_EveryErrTypeHasACase(t *testing.T) {
 	cases := []struct {
@@ -57,11 +57,11 @@ func TestHandleError_EveryErrTypeHasACase(t *testing.T) {
 	}
 	for _, et := range allErrTypes {
 		if !covered[et] {
-			t.Errorf("ErrType %q has no row in the handleError contract table — add a triggering error", et)
+			t.Errorf("ErrType %q has no row in the handleError contract table: add a triggering error", et)
 		}
 	}
 	if len(cases) != len(allErrTypes) {
-		t.Errorf("contract table has %d rows but there are %d ErrType constants — keep them in lockstep",
+		t.Errorf("contract table has %d rows but there are %d ErrType constants: keep them in lockstep",
 			len(cases), len(allErrTypes))
 	}
 

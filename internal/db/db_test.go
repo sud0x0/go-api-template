@@ -13,7 +13,7 @@ import (
 
 // TestToInt32 covers the conversion guard: negatives and values above MaxInt32
 // are rejected; 0 and MaxInt32 convert. The MaxInt32+1 overflow case only
-// exists where int is 64-bit — on a 32-bit-int platform that value cannot be
+// exists where int is 64-bit. On a 32-bit-int platform that value cannot be
 // represented as an int at all (and config parsing rejects it earlier via
 // strconv.Atoi), so it is constructed from int64 and guarded by
 // strconv.IntSize == 64. The int() conversion is therefore never reached on
@@ -49,7 +49,7 @@ func TestWithTransaction_Commits(t *testing.T) {
 	mock.ExpectCommit()
 
 	d := &DB{}
-	// Bypass New() — drive the transactional path directly via the mock pool.
+	// Bypass New(): drive the transactional path directly via the mock pool.
 	err = withTransactionOnIface(context.Background(), mock, func(tx pgx.Tx) error {
 		_, err := tx.Exec(context.Background(), "INSERT INTO x")
 		return err
@@ -110,7 +110,7 @@ func TestWithTransaction_BeginFailureSurfaces(t *testing.T) {
 
 // withTransactionOnIface mirrors DB.WithTransaction but takes the begin source
 // as a pgxmock interface so tests do not need a real *pgxpool.Pool. The shape
-// is identical to the production method — same commit/rollback semantics —
+// is identical to the production method (same commit/rollback semantics)
 // so this test exercises the production logic, not a copy.
 //
 // Keeping the production method tied to *pgxpool.Pool (rather than refactoring

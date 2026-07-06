@@ -115,7 +115,7 @@ func TestBuildConnConfig_DefaultRuntimeParams(t *testing.T) {
 }
 
 // TestBuildConnConfig_RuntimeParamOverrides verifies non-default values
-// pass through unchanged — important because long backfills routinely
+// pass through unchanged, important because long backfills routinely
 // raise these.
 func TestBuildConnConfig_RuntimeParamOverrides(t *testing.T) {
 	cfg := &config.MigratorConfig{

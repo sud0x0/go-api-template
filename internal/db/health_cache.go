@@ -14,7 +14,7 @@ import (
 //
 // The lock is intentionally held across the underlying check: under a burst,
 // the first caller runs the single ping while the rest block briefly, then all
-// observe the freshly-cached result — collapsing N concurrent probes into one
+// observe the freshly-cached result, collapsing N concurrent probes into one
 // backend round-trip.
 type HealthCache struct {
 	check func(context.Context) error
@@ -41,7 +41,7 @@ func NewHealthCache(check func(context.Context) error, ttl time.Duration) *Healt
 // caller's cancellation and deadline are dropped). This is a security
 // requirement, not a nicety: the result is SHARED with every other caller, so a
 // single caller's cancellation must never decide it. Without detachment, an
-// internet client could request /readyz and abort the connection mid-ping —
+// internet client could request /readyz and abort the connection mid-ping:
 // pool.Ping fails with context.Canceled, the failure is cached for the whole
 // TTL, and the real load-balancer probe then sees 503 and ejects a healthy
 // instance. A remotely triggerable DoS that the cache itself would introduce.
@@ -49,7 +49,7 @@ func NewHealthCache(check func(context.Context) error, ttl time.Duration) *Healt
 // applies 3s), which WithoutCancel leaves intact.
 //
 // Defence in depth: a context.Canceled result is returned to the caller but NOT
-// cached — even though detachment makes it nearly unreachable, caching a
+// cached. Even though detachment makes it nearly unreachable, caching a
 // cancellation would still be wrong, so the next caller runs a fresh check.
 // context.DeadlineExceeded IS cached: a ping that genuinely timed out is real
 // signal about the database, not caller noise.

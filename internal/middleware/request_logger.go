@@ -18,7 +18,7 @@ import (
 //
 // Because the per-request fields are bound onto the logger via slog's
 // .With() inside WithRequestContext, every log line emitted during the
-// request — including LogError calls from inside handlers — carries
+// request (including LogError calls from inside handlers) carries
 // them automatically. A single log line is enough to identify the
 // request, the route, and the client; incident response is one query.
 //

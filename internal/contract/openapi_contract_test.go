@@ -11,6 +11,7 @@ package contract
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -32,7 +33,14 @@ type openAPISpec struct {
 }
 
 type operation struct {
-	Parameters []parameter `yaml:"parameters"`
+	Parameters []parameter            `yaml:"parameters"`
+	Responses  map[string]responseRef `yaml:"responses"`
+}
+
+// responseRef models an operation's response entry. Only its presence (the
+// status-code key) is read by these tests; the $ref is captured for context.
+type responseRef struct {
+	Ref string `yaml:"$ref"`
 }
 
 type parameter struct {
@@ -126,7 +134,7 @@ func TestOpenAPIPaginationModesDocumented(t *testing.T) {
 	}
 
 	if queryParam(op, "cursor") == nil {
-		t.Error("GET /api/v1/logs is missing the `cursor` query parameter — cursor pagination is undocumented")
+		t.Error("GET /api/v1/logs is missing the `cursor` query parameter. Cursor pagination is undocumented")
 	}
 
 	offsetParam := queryParam(op, "offset")
@@ -149,7 +157,7 @@ func TestOpenAPIPaginationModesDocumented(t *testing.T) {
 
 // TestOpenAPILogMaxLengthMatchesSharedConstant asserts the documented
 // `maxLength` on the `log` property of both request schemas equals
-// shared.LogMaxChars — so the spec's advertised length limit and the server's
+// shared.LogMaxChars, so the spec's advertised length limit and the server's
 // enforced one (the service checks shared.LogMaxChars) cannot silently diverge.
 func TestOpenAPILogMaxLengthMatchesSharedConstant(t *testing.T) {
 	spec := loadSpec(t)
@@ -179,6 +187,43 @@ func TestOpenAPILogMaxLengthMatchesSharedConstant(t *testing.T) {
 	// minimal structs in this test do not model, so the example is not trivially
 	// reachable through them. Examples are illustrative; the schema (the
 	// maxLength asserted above) is the contract.
+}
+
+// TestOpenAPIDocumentsForbidden pins the OPA authorisation deny path in the
+// spec so it cannot drift from the code. Every operation behind the /api/v1
+// auth middlewares (identified here as one that already documents a 401) must
+// also document a 403, because the OPA middleware returns 403 on an explicit
+// deny AND fail-closed on any OPA error. It also asserts the spec names the
+// bounded error type the middleware emits (shared.ErrTypeForbidden), so the
+// documented deny body cannot diverge from shared.WriteJSONError(...,
+// shared.ErrTypeForbidden, ...).
+func TestOpenAPIDocumentsForbidden(t *testing.T) {
+	spec := loadSpec(t)
+
+	for path, methods := range spec.Paths {
+		for method, op := range methods {
+			if _, has401 := op.Responses["401"]; !has401 {
+				// No 401 documented means the operation is not behind the auth
+				// middlewares (e.g. the public health probes), so 403 is not expected.
+				continue
+			}
+			if _, has403 := op.Responses["403"]; !has403 {
+				t.Errorf("%s %s documents 401 but not 403. The OPA authorisation deny path is undocumented",
+					strings.ToUpper(method), path)
+			}
+		}
+	}
+
+	// The spec must mention the exact forbidden error type the middleware writes,
+	// so the documented envelope and the code's ErrType constant stay in step.
+	data, err := os.ReadFile(filepath.Clean(openAPIPath))
+	if err != nil {
+		t.Fatalf("read OpenAPI spec %s: %v", openAPIPath, err)
+	}
+	if !strings.Contains(string(data), shared.ErrTypeForbidden) {
+		t.Errorf("OpenAPI spec never mentions the forbidden error type %q (shared.ErrTypeForbidden)",
+			shared.ErrTypeForbidden)
+	}
 }
 
 // TestOpenAPIBatchMaxMatchesSharedConstant asserts the documented `maxItems` on

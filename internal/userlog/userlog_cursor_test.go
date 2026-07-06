@@ -56,7 +56,7 @@ func TestDecodeCursor_Malformed(t *testing.T) {
 }
 
 // TestListLogs_CursorOffsetMutualExclusion verifies supplying both ?cursor and
-// ?offset is a 400 invalid_pagination — before any DB call.
+// ?offset is a 400 invalid_pagination, before any DB call.
 func TestListLogs_CursorOffsetMutualExclusion(t *testing.T) {
 	handler, mock, cv, cleanup := setupTestStack(t)
 	defer cleanup()
@@ -97,7 +97,7 @@ func TestListLogs_CursorMalformed(t *testing.T) {
 
 // TestListLogs_CursorPageWalk walks two pages over mocked rows where two rows
 // share the same date_and_time (a tie at the page boundary). It asserts the
-// walk yields every row exactly once with no gaps or duplicates — proving the
+// walk yields every row exactly once with no gaps or duplicates, proving the
 // cursor carries the full keyset (date_and_time, id), not just the timestamp,
 // and that the limit+1 "extra" row is re-fetched via the cursor rather than
 // returned twice.

@@ -47,11 +47,11 @@ func TestHealthCache_RefreshesAfterTTL(t *testing.T) {
 	if err := c.Check(context.Background()); err != nil {
 		t.Fatalf("first Check: %v", err)
 	}
-	// Still within TTL — cached healthy, no new call.
+	// Still within TTL: cached healthy, no new call.
 	if err := c.Check(context.Background()); err != nil {
 		t.Fatalf("cached Check: %v", err)
 	}
-	// Advance past the TTL — the check re-runs and now reports the failure.
+	// Advance past the TTL: the check re-runs and now reports the failure.
 	now = now.Add(2 * time.Second)
 	if err := c.Check(context.Background()); !errors.Is(err, wantErr) {
 		t.Errorf("after TTL: got %v want %v", err, wantErr)
@@ -79,7 +79,7 @@ func TestHealthCache_DetachesCallerCancellation(t *testing.T) {
 		t.Errorf("Check should complete on a detached context, got err: %v", err)
 	}
 	if gotCancelled {
-		t.Error("underlying check received a cancelled context — WithoutCancel detachment missing")
+		t.Error("underlying check received a cancelled context: WithoutCancel detachment missing")
 	}
 }
 
@@ -128,7 +128,7 @@ func TestHealthCache_DoesNotCacheCanceled(t *testing.T) {
 }
 
 // TestHealthCache_CachesDeadlineExceeded verifies that a genuine ping timeout
-// (context.DeadlineExceeded) IS cached within the TTL — it is real database
+// (context.DeadlineExceeded) IS cached within the TTL: it is real database
 // signal, unlike a caller cancellation.
 func TestHealthCache_CachesDeadlineExceeded(t *testing.T) {
 	var calls atomic.Int64

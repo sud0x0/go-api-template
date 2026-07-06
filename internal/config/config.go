@@ -54,7 +54,7 @@ type ServerConfig struct {
 	// balancer overwrites these headers on every request.
 	TrustProxyHeaders bool
 	// RateLimitRPM is the app-level requests-per-minute-per-IP cap. 0 (the
-	// default) disables the limiter entirely — the middleware is not even
+	// default) disables the limiter entirely: the middleware is not even
 	// registered. The PRIMARY rate-limit control is the edge (LB / gateway /
 	// WAF); this is only a fallback for edge-less deployments. The counters are
 	// in-memory per instance, so the effective global limit is RateLimitRPM ×
@@ -117,9 +117,9 @@ type ObservabilityConfig struct {
 
 // AuthConfig holds the two-layer auth model's settings. It is a dedicated
 // struct (parallel to ObservabilityConfig) rather than fields tacked onto
-// ServerConfig because auth spans two distinct subsystems — authentication
-// (OIDC token validation, in-process) and authorisation (OPA sidecar over REST)
-// — and keeping them together localises both the main() wiring and the
+// ServerConfig because auth spans two distinct subsystems, authentication
+// (OIDC token validation, in-process) and authorisation (OPA sidecar over REST),
+// and keeping them together localises both the main() wiring and the
 // validate() fail-fast rules to one place.
 //
 // Both layers are OFF by default so the template boots with no IdP and no OPA
@@ -133,7 +133,7 @@ type AuthConfig struct {
 // OIDCConfig holds the resource-server authentication settings. The template is
 // an OAuth2 RESOURCE SERVER: it validates a Bearer access token against the
 // IdP's discovered JWKS. It is NOT an authorization server and NOT a browser
-// OIDC client — the login redirect, code exchange, PKCE, and nonce belong to the
+// OIDC client: the login redirect, code exchange, PKCE, and nonce belong to the
 // adopter's IdP and frontend (see .claude/rules/decisions.md).
 type OIDCConfig struct {
 	// Enabled gates the authentication middleware. When false the middleware is
@@ -149,7 +149,7 @@ type OIDCConfig struct {
 	IssuerURL string
 	// Audience is the expected token audience from OIDC_AUDIENCE (typically this
 	// service's client id). It is passed to the verifier as ClientID so the aud
-	// claim is validated (ASVS V9.2.3 / V10.3.1). Required when OIDC is enabled —
+	// claim is validated (ASVS V9.2.3 / V10.3.1). Required when OIDC is enabled:
 	// an empty audience would force go-oidc's SkipClientIDCheck, which we never do.
 	Audience string
 }
@@ -157,7 +157,7 @@ type OIDCConfig struct {
 // OPAConfig holds the Open Policy Agent authorisation settings. After
 // authentication, the authz middleware asks an OPA sidecar (over its REST Data
 // API) whether {principal, action, resource} is allowed and enforces the result.
-// This is FUNCTION-LEVEL authorisation only — the repository's WHERE user_id =
+// This is FUNCTION-LEVEL authorisation only: the repository's WHERE user_id =
 // $N SQL scoping stays as the row-ownership layer (defence in depth).
 type OPAConfig struct {
 	// Enabled gates the authorisation middleware. When false it is not registered
@@ -248,7 +248,7 @@ type MigratorConfig struct {
 	Database         DatabaseConfig
 	LockTimeout      string // Postgres duration string (e.g. "5s")
 	StatementTimeout string // Postgres duration string (e.g. "10min")
-	AllowDestructive string // MIGRATOR_ALLOW_DESTRUCTIVE — "true" gates destructive subcommands (paired with --confirm-destructive)
+	AllowDestructive string // MIGRATOR_ALLOW_DESTRUCTIVE: "true" gates destructive subcommands (paired with --confirm-destructive)
 }
 
 // LoadMigrator reads the migrator binary's env vars. It reuses LoadDatabase
@@ -386,7 +386,7 @@ func Load() (*Config, error) {
 		},
 		Database: *dbCfg,
 		Log: LogConfig{
-			// Default to production (info level) — a fail-safe default so an
+			// Default to production (info level), a fail-safe default so an
 			// unset LOG_LEVEL never accidentally ships debug-level logs (which
 			// can be verbose and may surface internals). Dev sets it explicitly.
 			Level: strings.ToLower(getEnv("LOG_LEVEL", "production")),
@@ -426,7 +426,7 @@ func Load() (*Config, error) {
 // already validated the Database section before Load embedded it.
 func (c *Config) validate() error {
 	// A WriteTimeout shorter than RequestTimeout causes slow responses to be
-	// truncated mid-write before the handler timeout fires — usually surfacing
+	// truncated mid-write before the handler timeout fires, usually surfacing
 	// as confusing "connection reset" reports. Fail at startup rather than ship.
 	if c.Server.WriteTimeout <= c.Server.RequestTimeout {
 		return fmt.Errorf(
@@ -437,7 +437,7 @@ func (c *Config) validate() error {
 	}
 
 	// The CORS middleware matches origins exactly (slices.Contains), so a
-	// wildcard entry is silently inert — it would never match and contradicts
+	// wildcard entry is silently inert: it would never match and contradicts
 	// the documented "never `*` in production" rule while giving a false sense
 	// that all origins are allowed. Fail loudly instead.
 	for _, origin := range c.CORS.AllowedOrigins {
@@ -456,7 +456,7 @@ func (c *Config) validate() error {
 	// origin), so this combination is always a misconfiguration.
 	if c.CORS.AllowCredentials && len(c.CORS.AllowedOrigins) == 0 {
 		return fmt.Errorf(
-			"CORS_ALLOW_CREDENTIALS=true requires a non-empty CORS_ALLOWED_ORIGINS — " +
+			"CORS_ALLOW_CREDENTIALS=true requires a non-empty CORS_ALLOWED_ORIGINS: " +
 				"credentialed CORS with no allowed origins can never succeed",
 		)
 	}
@@ -476,8 +476,8 @@ func (c *Config) validate() error {
 	// The issuer is where go-oidc fetches the JWKS and is matched exactly; the
 	// audience is passed to the verifier as ClientID so the aud claim is checked
 	// (ASVS V9.2.3 / V10.3.1). We require the audience rather than let it be empty
-	// because an empty ClientID forces go-oidc's SkipClientIDCheck — accepting
-	// tokens minted for any audience — which this template never does.
+	// because an empty ClientID forces go-oidc's SkipClientIDCheck, accepting
+	// tokens minted for any audience, which this template never does.
 	if c.Auth.OIDC.Enabled {
 		if c.Auth.OIDC.IssuerURL == "" {
 			return fmt.Errorf(
@@ -496,7 +496,7 @@ func (c *Config) validate() error {
 	// OPA authorisation, when enabled, needs a sidecar URL and a bounded timeout.
 	// The timeout sits on every request's hot path, so a zero or absurd value is a
 	// misconfiguration: fail fast rather than hang or spin. 60s is a generous
-	// upper bound — a real OPA answers in single-digit milliseconds.
+	// upper bound: a real OPA answers in single-digit milliseconds.
 	if c.Auth.OPA.Enabled {
 		if c.Auth.OPA.URL == "" {
 			return fmt.Errorf(
@@ -556,7 +556,7 @@ func getEnv(key, defaultValue string) string {
 }
 
 // getEnvInt parses an integer environment variable. Returns an error rather
-// than silently falling back when the value is set but unparseable — a typo
+// than silently falling back when the value is set but unparseable: a typo
 // in DB_MAX_OPEN_CONNS should not silently boot with the default.
 func getEnvInt(key string, defaultValue int) (int, error) {
 	value := os.Getenv(key)

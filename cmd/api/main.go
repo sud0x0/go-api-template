@@ -42,7 +42,7 @@ const readinessCacheTTL = 2 * time.Second
 
 // registerEnvelopeFallbacks installs router-level 404/405 handlers that emit the
 // shared JSON error envelope, replacing chi's plain-text defaults. Use it on the
-// PUBLIC router only — the internal admin router keeps chi defaults.
+// PUBLIC router only. The internal admin router keeps chi defaults.
 //
 // These are router-level errors (no feature label) and are deliberately NOT
 // recorded on api.errors. http.server.request.count already counts them via the
@@ -51,7 +51,7 @@ const readinessCacheTTL = 2 * time.Second
 // chi sets the Allow header on a 405 only through its DEFAULT handler; a custom
 // MethodNotAllowed handler is not given the allowed-methods list (it is
 // unexported on the route context). WriteJSONError does not touch the Allow
-// header, so any value already set upstream is preserved — in practice chi sets
+// header, so any value already set upstream is preserved. In practice chi sets
 // none for a custom handler, so 405s carry the envelope but no Allow header.
 func registerEnvelopeFallbacks(r chi.Router) {
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
@@ -78,7 +78,7 @@ func main() {
 
 	// Initialise logger with configured level. "go-api" is bound onto every
 	// log line as the service attribute, alongside the build's version and
-	// commit — see internal/shared/logger.NewLogger.
+	// commit. See internal/shared/logger.NewLogger.
 	appLogger := logger.NewLogger(cfg.Log.Level, "go-api")
 	// Install the app logger as slog's process-wide default so any code logging
 	// via the slog package default routes through our handler. Done here (not in
@@ -133,7 +133,7 @@ func main() {
 
 	// Two-layer auth model (see .claude/rules/decisions.md): LAYER 1
 	// authentication (OIDC, in-process) then LAYER 2 authorisation (OPA sidecar
-	// over REST). Both are opt-in — when a layer is disabled its middleware is nil
+	// over REST). Both are opt-in. When a layer is disabled its middleware is nil
 	// and simply not registered, so the template boots with no IdP and no OPA for
 	// local dev. Constructed BEFORE the router so an OIDC discovery failure aborts
 	// startup rather than booting with auth "enabled" but no verifier (which would
@@ -151,7 +151,7 @@ func main() {
 		appLogger.LogInfo("authentication enabled (OIDC)",
 			"issuer", cfg.Auth.OIDC.IssuerURL, "audience", cfg.Auth.OIDC.Audience)
 	} else {
-		appLogger.LogWarn("authentication DISABLED: OIDC_ISSUER_URL is unset — " +
+		appLogger.LogWarn("authentication DISABLED: OIDC_ISSUER_URL is unset. " +
 			"/api/v1 runs unauthenticated (local-dev mode; set OIDC_ISSUER_URL to enable)")
 	}
 
@@ -161,7 +161,7 @@ func main() {
 		appLogger.LogInfo("authorisation enabled (OPA)",
 			"opa_url", cfg.Auth.OPA.URL, "decision_path", cfg.Auth.OPA.DecisionPath)
 	} else {
-		appLogger.LogWarn("authorisation DISABLED: OPA_URL is unset — " +
+		appLogger.LogWarn("authorisation DISABLED: OPA_URL is unset. " +
 			"/api/v1 requests are not policy-checked (local-dev mode; set OPA_URL to enable)")
 	}
 
@@ -178,7 +178,7 @@ func main() {
 	// false) and only registered when the app sits behind a trusted reverse
 	// proxy / load balancer that overwrites those headers on every request. With
 	// the default false, the headers are ignored and r.RemoteAddr is the real
-	// peer — safe for an app exposed directly to the internet.
+	// peer, safe for an app exposed directly to the internet.
 	if cfg.Server.TrustProxyHeaders {
 		publicRouter.Use(chimw.RealIP)
 	}
@@ -188,7 +188,7 @@ func main() {
 	// CORS is registered BEFORE the metrics middleware, so it wraps it (chi runs
 	// middleware in registration order, outer-first). The CORS middleware
 	// short-circuits every preflight OPTIONS request with 204 and returns
-	// WITHOUT calling next — so preflights never reach appMetrics.Middleware and
+	// WITHOUT calling next, so preflights never reach appMetrics.Middleware and
 	// do NOT appear in http.server.request.count. This is intentional: CORS
 	// preflights are browser-protocol overhead, not application requests, and
 	// counting them would inflate the request metrics with traffic the handlers
@@ -202,7 +202,7 @@ func main() {
 
 	// Application-level rate limiting is a FALLBACK, not the primary control.
 	// The PRIMARY rate-limit control for this template is the network edge
-	// (load balancer / API gateway / WAF) — see README "Deployment
+	// (load balancer / API gateway / WAF). See README "Deployment
 	// requirements". This middleware exists only for deployments that have no
 	// edge limiter, and as the future home of per-USER limits once auth lands
 	// (re-key by user ID then, for business-aware per-endpoint limits).
@@ -217,7 +217,7 @@ func main() {
 	// cache and edge controls instead of the app limiter.
 	//
 	// IMPORTANT: httprate counters are IN-MEMORY PER INSTANCE, so the effective
-	// global limit is RATE_LIMIT_RPM × replica count — a true global limit
+	// global limit is RATE_LIMIT_RPM × replica count. A true global limit
 	// belongs at the edge. And because it keys by IP, a deployment behind a
 	// proxy WITHOUT TRUST_PROXY_HEADERS sees every request as the proxy's single
 	// IP, dumping all traffic into one bucket and self-DoSing the API (warned
@@ -226,7 +226,7 @@ func main() {
 	if cfg.Server.RateLimitRPM > 0 {
 		if !cfg.Server.TrustProxyHeaders {
 			appLogger.LogWarn(
-				"RATE_LIMIT_RPM is enabled while TRUST_PROXY_HEADERS is false — "+
+				"RATE_LIMIT_RPM is enabled while TRUST_PROXY_HEADERS is false: "+
 					"if this app is behind a proxy, all requests share the proxy's IP and fall into a single "+
 					"rate-limit bucket, which self-DoSes the API. Enable TRUST_PROXY_HEADERS only behind a trusted proxy.",
 				"rate_limit_rpm", cfg.Server.RateLimitRPM,
@@ -250,11 +250,11 @@ func main() {
 	// Router-level fallbacks on the PUBLIC router: chi's defaults answer
 	// unmatched paths with plain-text "404 page not found" and bare 405s, which
 	// bypass the single JSON-envelope rule. Override them so every public
-	// response — including these — uses shared.WriteJSONError. These are
+	// response (including these) uses shared.WriteJSONError. These are
 	// router-level (no feature label) and are NOT recorded on api.errors.
 	// http.server.request.count already counts them via the metrics middleware.
 	//
-	// Known intentional gaps (out of scope — those middlewares own their bodies):
+	// Known intentional gaps (out of scope: those middlewares own their bodies):
 	// chimw.Timeout answers a timed-out request with a body-less 504, and
 	// chimw.Recoverer answers a panic with a body-less 500. Replacing those
 	// would mean reimplementing the middlewares.
@@ -263,7 +263,7 @@ func main() {
 	// defaults: it is an operator-only surface (oncall), not a public API, so
 	// envelope consistency there is unnecessary.
 
-	// Liveness probe — minimal check that the process is responsive.
+	// Liveness probe: minimal check that the process is responsive.
 	// Does NOT check downstream dependencies, so a transient DB outage will
 	// not cause the orchestrator to kill an otherwise-healthy pod. Use this
 	// for Kubernetes livenessProbe. Kept on the public router so the
@@ -276,13 +276,13 @@ func main() {
 	}
 	publicRouter.Get("/livez", livezHandler)
 
-	// Readiness probe — verifies the application is ready to serve traffic
+	// Readiness probe: verifies the application is ready to serve traffic
 	// by checking dependencies (currently the database). Returns 503 if the
 	// app is up but unable to handle requests. Use this for Kubernetes
 	// readinessProbe and load balancer health checks.
 	//
 	// Uses logger.FromContext so the LogError line emitted on a failed
-	// readiness check carries request_id, method, path, and ip — same
+	// readiness check carries request_id, method, path, and ip, the same
 	// shape as any other in-request log. Falls back to appLogger if no
 	// request-scoped logger is present (e.g. internal-router probe).
 	// Cache the readiness result for a short TTL so a flood of probes on the
@@ -305,8 +305,8 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"healthy"}`))
 	}
 	// Readiness is served on the public listener only when PUBLIC_READINESS is
-	// true (the default). Set it false to keep readiness — a DB ping plus an
-	// operational-state signal — on the internal admin port only, off the public
+	// true (the default). Set it false to keep readiness (a DB ping plus an
+	// operational-state signal) on the internal admin port only, off the public
 	// boundary. /livez (above) stays public regardless so the container
 	// HEALTHCHECK keeps working.
 	if cfg.Server.PublicReadiness {
@@ -319,13 +319,13 @@ func main() {
 	// Wire up log feature. The handler emits api_errors_total via appMetrics.
 	// The service takes the pool-backed repository for single-row paths AND the
 	// *db.DB itself as the transaction runner for multi-statement atomic paths
-	// (e.g. POST /logs/batch) — see userlog.NewLogService.
+	// (e.g. POST /logs/batch). See userlog.NewLogService.
 	logRepo := userlog.NewLogRepository(database.Pool())
 	logService := userlog.NewLogService(logRepo, database)
 	logHandler := userlog.NewLogHandler(logService, appLogger, appMetrics)
 
 	// Business routes live in a Group so the app-level rate limiter (when
-	// enabled) applies to them — and to any future business routes added here —
+	// enabled) applies to them (and to any future business routes added here)
 	// but NOT to the health endpoints registered above, which sit outside this
 	// group and are therefore never rate-limited.
 	publicRouter.Group(func(r chi.Router) {
@@ -338,19 +338,19 @@ func main() {
 			// Two-layer auth model (see .claude/rules/decisions.md). Middlewares
 			// run in registration order, so LAYER 1 authentication is registered
 			// before LAYER 2 authorisation: a request must be authenticated before
-			// it is policy-checked. Both are opt-in — when a layer is disabled its
+			// it is policy-checked. Both are opt-in. When a layer is disabled its
 			// value is nil and it is not registered, so local dev with no IdP / no
 			// OPA still works.
 			//
 			// Layer 1 (OIDC): validates the Bearer access token against the IdP's
 			// discovered JWKS and stores the caller's internal UUID via
-			// shared.WithUserID — handlers read it back via
+			// shared.WithUserID. Handlers read it back via
 			// shared.UserIDFromContext. The key lives in internal/shared so this
 			// infrastructure middleware never imports a feature package.
 			//
 			// Layer 2 (OPA): FUNCTION-LEVEL authorisation over OPA's REST Data API,
 			// fail closed. It does NOT replace the repository's WHERE user_id = $N
-			// row-ownership scoping — the two layers are deliberately SEPARATE: OPA
+			// row-ownership scoping. The two layers are deliberately SEPARATE: OPA
 			// answers "may this role call this endpoint", the SQL answers "may this
 			// user see this row". A future change must not collapse them by pushing
 			// row filtering into OPA.
@@ -361,7 +361,7 @@ func main() {
 				r.Use(opaAuthz.Handler)
 			}
 
-			// Each feature registers its own routes — adding a feature is one line
+			// Each feature registers its own routes. Adding a feature is one line
 			// here, not five. See userlog.Handler.Routes.
 			logHandler.Routes(r)
 		})
@@ -381,7 +381,7 @@ func main() {
 	internalRouter.Use(appMetrics.Middleware)
 	// Mirror all three health endpoints on the internal port so k8s probes (and
 	// operators) can target the internal listener without exposing the public
-	// API — and so readiness stays reachable even when PUBLIC_READINESS is false.
+	// API, and so readiness stays reachable even when PUBLIC_READINESS is false.
 	internalRouter.Get("/livez", livezHandler)
 	internalRouter.Get("/readyz", readyHandler)
 	internalRouter.Get("/health", readyHandler)
@@ -419,7 +419,7 @@ func main() {
 	}
 
 	// Push server start errors onto a channel rather than os.Exit'ing inside
-	// goroutines — exiting there would skip the graceful cleanup below
+	// goroutines. Exiting there would skip the graceful cleanup below
 	// and leak DB connections.
 	serverErrCh := make(chan error, 2)
 	go func() {

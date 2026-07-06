@@ -57,7 +57,7 @@ func TestSlogLogger_BaseAttrsOnEveryLine(t *testing.T) {
 // TestSlogLogger_WithRequestContext_BindsAllAttrsOnEveryLine is the
 // contract test for the refactor: every line emitted by a logger
 // derived from WithRequestContext must carry the request_id, method,
-// path, ip, and user_id — not just the "request completed" line.
+// path, ip, and user_id, not just the "request completed" line.
 func TestSlogLogger_WithRequestContext_BindsAllAttrsOnEveryLine(t *testing.T) {
 	buf := &bytes.Buffer{}
 	scoped := testLogger(buf).WithRequestContext(RequestContext{
@@ -184,7 +184,7 @@ func TestSlogLogger_WithRequestContext_EmptyReturnsSelf(t *testing.T) {
 }
 
 // TestSlogLogger_LogWarn_LevelGating verifies LogWarn is emitted at the levels
-// an operator expects and suppressed where it should be — exercising the real
+// an operator expects and suppressed where it should be, exercising the real
 // slogHandlerForLevel mapping: "quiet" (warnings + errors) and "production"
 // (info + warnings + errors) emit it; "silent" (errors only) suppresses it.
 // This closes the gap the doc comment promised but nothing could satisfy:

@@ -13,7 +13,7 @@ import (
 
 // RequiredTables names the database tables this feature needs. cmd/api/main.go
 // aggregates every feature's RequiredTables and passes them to db.New for
-// startup schema verification — so adding a feature registers its tables here,
+// startup schema verification, so adding a feature registers its tables here,
 // never by editing internal/db.
 var RequiredTables = []string{"logs"}
 
@@ -26,7 +26,7 @@ var RequiredTables = []string{"logs"}
 // over-length string. The guard is retained because the repository is also
 // callable directly by NON-handler paths (integration tests today, future
 // workers/CLIs) that do not pass through UserIDFromContext and could supply an
-// arbitrary string — those must still be bounded before they reach Postgres.
+// arbitrary string. Those must still be bounded before they reach Postgres.
 const repoMaxUserIDLength = 64
 
 // SQL query strings.
@@ -50,7 +50,7 @@ const (
 	//
 	// Verified with EXPLAIN (ANALYZE, BUFFERS) on 5000 seeded rows (Postgres 16):
 	// "Index Scan using idx_logs_user_datetime_id" with the row-value comparison
-	// as an Index Cond — `ROW(date_and_time, id) < ROW($4, $5)` — NOT a Filter,
+	// as an Index Cond (`ROW(date_and_time, id) < ROW($4, $5)`), NOT a Filter,
 	// alongside the user_id equality and the date-range bounds. The LIMIT stops
 	// the scan after the page (≈5 buffer hits for 101 rows). A constant-cost
 	// index seek; re-check the plan if the index or WHERE shape changes.
@@ -84,8 +84,8 @@ type pgxLogRepository struct {
 // mock pools, so the repository works inside or outside transactions and is
 // unit-testable without a real database.
 //
-// The repository does not log — diagnostics are the handler's job (it owns the
-// request-scoped logger and the bounded error metrics) — so no logger is taken.
+// The repository does not log; diagnostics are the handler's job (it owns the
+// request-scoped logger and the bounded error metrics), so no logger is taken.
 func NewLogRepository(pool db.PgxIface) logRepository {
 	return &pgxLogRepository{pool: pool}
 }

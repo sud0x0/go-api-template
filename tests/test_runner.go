@@ -58,7 +58,7 @@ func main() {
 	fmt.Printf("%sRunning tests...%s\n\n", colourBold, colourReset)
 
 	// -race so the pretty wrapper exercises the SAME suite as `make test-unit`
-	// (go test -race ./...) — pretty and plain must test the same thing.
+	// (go test -race ./...): pretty and plain must test the same thing.
 	cmd := exec.Command("go", "test", "-race", "-json", "./...")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

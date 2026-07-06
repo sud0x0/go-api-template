@@ -37,7 +37,7 @@ func (m *integrationLogger) LogInfo(message string, args ...any)                
 func (m *integrationLogger) LogDebug(message string, args ...any)                     {}
 func (m *integrationLogger) WithRequestContext(_ logger.RequestContext) logger.Logger { return m }
 
-// noopHandlerMetrics is a HandlerMetrics that discards calls — used by
+// noopHandlerMetrics is a HandlerMetrics that discards calls, used by
 // integration tests that don't care about the api_errors_total counter.
 type noopHandlerMetrics struct{}
 
@@ -126,7 +126,7 @@ func TestLogRepository_CRUD_Integration(t *testing.T) {
 	}
 
 	// Prove the update_logs_updated_at trigger sets updated_at = NOW() on UPDATE,
-	// deterministically — no sleep, no comparison of two near-simultaneous
+	// deterministically, no sleep, no comparison of two near-simultaneous
 	// wall-clock timestamps. The trigger fires on UPDATE, not INSERT, so a direct
 	// INSERT with a fixed, long-past sentinel updated_at makes the sentinel stick;
 	// a real update through the repository must then move updated_at OFF it. The
@@ -157,7 +157,7 @@ func TestLogRepository_CRUD_Integration(t *testing.T) {
 		t.Fatalf("updateLog (seeded row): %v", err)
 	}
 	if !seeded.UpdatedAt.After(sentinelTime) {
-		t.Errorf("updated_at did not move off the seeded sentinel: got %s want a time after %s — the update_logs_updated_at trigger may be missing or the migration drifted",
+		t.Errorf("updated_at did not move off the seeded sentinel: got %s want a time after %s; the update_logs_updated_at trigger may be missing or the migration drifted",
 			seeded.UpdatedAt.Format(time.RFC3339), sentinel)
 	}
 
@@ -188,7 +188,7 @@ func TestLogRepository_CRUD_Integration(t *testing.T) {
 }
 
 // TestLogHandler_InvalidUUID_Integration verifies the end-to-end 400 path
-// from item 6 — an invalid UUID never reaches the database.
+// from item 6: an invalid UUID never reaches the database.
 func TestLogHandler_InvalidUUID_Integration(t *testing.T) {
 	pool := setupIntegrationPool(t)
 	log := &integrationLogger{}
@@ -333,7 +333,7 @@ func TestLogService_BatchCreate_InvalidEntryLeavesZeroRows_Integration(t *testin
 // TestLogService_BatchCreate_RollsBackOnDBError_Integration verifies a failure
 // that occurs MID-transaction (the third insert is rejected by Postgres because
 // the log contains a NUL byte, which TEXT cannot store) rolls back the whole
-// batch — proving atomicity at the database layer, not just up-front validation.
+// batch, proving atomicity at the database layer, not just up-front validation.
 // This is the Task 2 "kill the third insert → zero rows" proof.
 func TestLogService_BatchCreate_RollsBackOnDBError_Integration(t *testing.T) {
 	database := setupIntegrationDB(t)
@@ -346,7 +346,7 @@ func TestLogService_BatchCreate_RollsBackOnDBError_Integration(t *testing.T) {
 	})
 
 	// The NUL byte passes app validation (it counts as one rune; the date is
-	// valid) but Postgres rejects it on INSERT — a deterministic mid-transaction
+	// valid) but Postgres rejects it on INSERT, a deterministic mid-transaction
 	// failure on the third statement.
 	reqs := []CreateRequest{
 		{DateAndTime: "2025-01-15T10:00:00Z", Log: "ok1"},
@@ -399,8 +399,8 @@ func walkCursor(t *testing.T, svc *defaultLogService, userID string, limit int, 
 
 // TestLogService_CursorWalk_TieBreak_Integration inserts rows with deliberate
 // timestamp ties, walks every page via next_cursor with a small page size, and
-// asserts the union equals the inserted set EXACTLY ONCE — no gaps, no
-// duplicates — across boundaries where rows share a date_and_time. This is the
+// asserts the union equals the inserted set EXACTLY ONCE (no gaps, no
+// duplicates) across boundaries where rows share a date_and_time. This is the
 // Task 3 tie-break proof; it fails if the cursor drops the id tiebreaker.
 func TestLogService_CursorWalk_TieBreak_Integration(t *testing.T) {
 	database := setupIntegrationDB(t)
@@ -421,7 +421,7 @@ func TestLogService_CursorWalk_TieBreak_Integration(t *testing.T) {
 		}
 		inserted[l.ID] = true
 	}
-	// 3 rows tie on the later timestamp, 2 tie on the earlier — 5 across page
+	// 3 rows tie on the later timestamp, 2 tie on the earlier: 5 across page
 	// boundaries with a page size of 2, so ties straddle boundaries.
 	for range 3 {
 		insert("2025-03-01T10:00:00Z")
@@ -451,7 +451,7 @@ func TestLogService_CursorWalk_TieBreak_Integration(t *testing.T) {
 
 // TestLogService_CursorWalk_ConcurrentInsert_Integration walks the list while a
 // new (older) row is inserted mid-walk, and asserts the keyset walk never
-// returns a duplicate — the property offset pagination cannot guarantee under
+// returns a duplicate, the property offset pagination cannot guarantee under
 // concurrent inserts. The mid-walk row sorts into the not-yet-walked region, so
 // it also appears.
 func TestLogService_CursorWalk_ConcurrentInsert_Integration(t *testing.T) {
@@ -597,13 +597,13 @@ func TestLogRepository_CrossUserIsolation_Integration(t *testing.T) {
 		}
 	}
 
-	// A's row still exists and is unchanged — B's PUT/DELETE did nothing.
+	// A's row still exists and is unchanged; B's PUT/DELETE did nothing.
 	after, err := repo.getLog(ctx, aRow.ID, userA)
 	if err != nil {
 		t.Fatalf("A's row must still exist after B's attempts: %v", err)
 	}
 	if after.Log != "user A private row" {
-		t.Errorf("A's row content changed to %q — a cross-user write leaked", after.Log)
+		t.Errorf("A's row content changed to %q: a cross-user write leaked", after.Log)
 	}
 }
 
@@ -614,7 +614,7 @@ func TestLogRepository_CrossUserIsolation_Integration(t *testing.T) {
 //
 // This is REGRESSION INSURANCE, not detection: it does not "catch" injection in
 // the current code (there is none). It exists to fail loudly if a future
-// refactor ever string-builds a query — at which point this payload would
+// refactor ever string-builds a query, at which point this payload would
 // execute (dropping the table) instead of round-tripping.
 func TestLogRepository_InjectionContent_RoundTrips_Integration(t *testing.T) {
 	database := setupIntegrationDB(t)
@@ -647,6 +647,6 @@ func TestLogRepository_InjectionContent_RoundTrips_Integration(t *testing.T) {
 	// would error. It succeeding proves the table survived.
 	if _, err := repo.getLogs(ctx, userID,
 		"1970-01-01T00:00:00Z", "2099-12-31T23:59:59Z", 10, 0); err != nil {
-		t.Fatalf("follow-up query failed — logs table may be gone: %v", err)
+		t.Fatalf("follow-up query failed, logs table may be gone: %v", err)
 	}
 }

@@ -139,7 +139,7 @@ func TestRunHealthcheck_ProbeUnreachable(t *testing.T) {
 // TestHandleFlags_HealthcheckPortFlag verifies the --port flag drives the
 // probe target. Bind a test server to a known localhost port, pass that port
 // via --port to handleFlags, and check the exit code reflects the probe
-// outcome — proving the flag is wired all the way through runHealthcheck.
+// outcome, proving the flag is wired all the way through runHealthcheck.
 func TestHandleFlags_HealthcheckPortFlag(t *testing.T) {
 	// Bind a listener on a free localhost port so we know the port number.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -173,8 +173,8 @@ func TestHandleFlags_HealthcheckPortFlag(t *testing.T) {
 	}
 }
 
-// (Default-port behaviour is exercised by TestHandleFlags_HealthcheckPortFlag —
-// with an explicit free port — and by TestRunHealthcheck_ProbeUnreachable.
+// (Default-port behaviour is exercised by TestHandleFlags_HealthcheckPortFlag
+// (with an explicit free port) and by TestRunHealthcheck_ProbeUnreachable.
 // A test that asserted the default 8080 was unreachable was removed: it
 // race-failed locally whenever the dev compose stack had port 8080
 // forwarded to a running app container.)

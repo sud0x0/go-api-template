@@ -1,6 +1,6 @@
 // Package scripts hosts repo-utility scripts and their Go tests. The
 // Go files here exist only so `go test ./...` can drive the shell
-// scripts and assert their behaviour — the actual logic lives in
+// scripts and assert their behaviour; the actual logic lives in
 // extract-changelog.sh.
 package scripts
 

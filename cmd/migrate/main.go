@@ -1,6 +1,6 @@
 // Command go-api-migrator is the production migrator binary. It embeds
 // every SQL migration file and applies them through goose's Provider API
-// behind a Postgres advisory lock — so concurrent migrator invocations
+// behind a Postgres advisory lock, so concurrent migrator invocations
 // against the same database are safely serialised.
 //
 // Connection details come from the same DB_* env vars the API uses
@@ -14,9 +14,9 @@
 //
 // Exit codes:
 //
-//	0 — success
-//	1 — migration or database error
-//	2 — usage or configuration error
+//	0: success
+//	1: migration or database error
+//	2: usage or configuration error
 package main
 
 import (
@@ -106,7 +106,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	// Load config first — env reads (including MIGRATOR_ALLOW_DESTRUCTIVE)
+	// Load config first: env reads (including MIGRATOR_ALLOW_DESTRUCTIVE)
 	// live exclusively in internal/config. The destructive gate is checked
 	// from cfg.AllowDestructive immediately afterward, before we open any
 	// database connection.
@@ -134,7 +134,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// PostgresSessionLocker uses pg_advisory_lock so concurrent migrator
 	// invocations against the same database serialise instead of racing.
 	// IMPORTANT: advisory locks are PER SESSION; the migrator must connect
-	// directly to Postgres (or via session-level pooling) — they do not
+	// directly to Postgres (or via session-level pooling). They do not
 	// survive PgBouncer transaction/statement pooling.
 	sessionLocker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
@@ -202,7 +202,7 @@ func dispatch(ctx context.Context, p *goose.Provider, cmd string, args []string,
 		printResults(stdout, results)
 		return err
 	case "redo":
-		// Spec: `redo` = Down then UpByOne — the Provider has no native redo.
+		// Spec: `redo` = Down then UpByOne. The Provider has no native redo.
 		down, err := p.Down(ctx)
 		if down != nil {
 			printResults(stdout, []*goose.MigrationResult{down})
@@ -293,7 +293,7 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprint(w, usageText)
 }
 
-const usageText = `go-api-migrator — production database migrator for go-api-template.
+const usageText = `go-api-migrator: production database migrator for go-api-template.
 
 USAGE:
   go-api-migrator [global flags] <subcommand> [args]

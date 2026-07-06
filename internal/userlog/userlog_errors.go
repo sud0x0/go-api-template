@@ -36,8 +36,8 @@ var ErrInvalidDateTime = errors.New("invalid date_and_time: use RFC3339 e.g. 200
 //
 // Field is one of "start_date", "end_date", "date_and_time" (the only three
 // date inputs in this package) or "" when no specific field applies. These are
-// compile-time constants at the call sites — a three-value set does not warrant
-// enum machinery — so naming the field leaks nothing from a lower layer.
+// compile-time constants at the call sites (a three-value set does not warrant
+// enum machinery), so naming the field leaks nothing from a lower layer.
 type InvalidDateTimeError struct {
 	Field string // "start_date" | "end_date" | "date_and_time" | ""
 	Index int    // batch entry index; -1 for non-batch paths
@@ -48,7 +48,7 @@ type InvalidDateTimeError struct {
 // then "<field>: " when Field != "", then the sentinel text. Examples:
 // "start_date: invalid date_and_time: use RFC3339 ...",
 // "entry 2: date_and_time: invalid date_and_time: use RFC3339 ...". Nothing from
-// lower layers leaks — every component is a constant or an integer index.
+// lower layers leaks: every component is a constant or an integer index.
 func (e *InvalidDateTimeError) Error() string {
 	msg := ErrInvalidDateTime.Error()
 	if e.Field != "" {
@@ -75,7 +75,7 @@ var ErrInvalidReqBody = errors.New("invalid request body")
 
 // ErrBodyTooLarge indicates the request body exceeded the server's size cap
 // (chimw.RequestSize). Per RFC 9110 this maps to 413 Content Too Large, not
-// 400 — see handleError.
+// 400. See handleError.
 var ErrBodyTooLarge = errors.New("request body too large")
 
 // ErrInternalServer indicates an internal server error.
@@ -118,7 +118,7 @@ const FeatureName = "log"
 
 // ErrType* are the bounded label values for the `error_type` label on
 // api_errors_total. Adding a new sentinel error requires adding a
-// corresponding ErrType constant and a case in handleError — never derive
+// corresponding ErrType constant and a case in handleError; never derive
 // label values from err.Error() text.
 const (
 	ErrTypeLogNotFound       = "log_not_found"

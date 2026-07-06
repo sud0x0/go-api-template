@@ -23,7 +23,7 @@ type logService interface {
 // txRunner is the transaction-control capability the service needs for
 // multi-statement atomic operations. *db.DB satisfies it (DB.WithTransaction).
 // It is an interface (not a concrete *db.DB) so the service stays unit-testable
-// with a pgxmock-backed fake — transaction control lives in the SERVICE layer,
+// with a pgxmock-backed fake: transaction control lives in the SERVICE layer,
 // repositories stay transaction-agnostic.
 type txRunner interface {
 	WithTransaction(ctx context.Context, fn func(tx pgx.Tx) error) error
@@ -31,7 +31,7 @@ type txRunner interface {
 
 // defaultLogService implements logService.
 type defaultLogService struct {
-	repo logRepository // single-row paths (already atomic — one statement each)
+	repo logRepository // single-row paths (already atomic, one statement each)
 	tx   txRunner      // multi-statement atomic paths (createLogs)
 }
 
@@ -39,8 +39,8 @@ type defaultLogService struct {
 //
 // It takes both the repository (for single-row paths, each of which is a single
 // already-atomic statement) and a txRunner (*db.DB) for multi-statement atomic
-// operations like createLogs. The service does not log — it returns wrapped
-// sentinel errors and lets the handler log/count them — so no logger is taken.
+// operations like createLogs. The service does not log; it returns wrapped
+// sentinel errors and lets the handler log/count them, so no logger is taken.
 func NewLogService(repo logRepository, tx txRunner) *defaultLogService {
 	return &defaultLogService{repo: repo, tx: tx}
 }
@@ -55,7 +55,7 @@ func (s *defaultLogService) getLog(ctx context.Context, id, userID string) (Log,
 // normaliseDateRange applies the wide-range defaults to an omitted start/end
 // date and validates both bounds as RFC3339, returning a non-batch
 // InvalidDateTimeError (Index = -1) naming the offending bound (Field
-// "start_date" or "end_date") on failure — so the operator and client can tell
+// "start_date" or "end_date") on failure, so the operator and client can tell
 // WHICH bound was malformed. Shared by the offset and cursor list paths so the
 // defaults and validation live in one place. The defaults are documented to
 // callers via the OpenAPI spec.
@@ -81,7 +81,7 @@ func (s *defaultLogService) getLogs(ctx context.Context, userID, startDate, endD
 	}
 
 	// limit and offset are already validated and normalised by
-	// shared.ValidatePagination in the handler — limit is guaranteed >= 1 and
+	// shared.ValidatePagination in the handler: limit is guaranteed >= 1 and
 	// offset >= 0, so no fallback is applied (or needed) here. The single
 	// source of truth for the default page size is shared.DefaultPageSize.
 
@@ -97,7 +97,7 @@ func (s *defaultLogService) getLogs(ctx context.Context, userID, startDate, endD
 // the next_cursor to fetch the following page (empty string on the last page).
 //
 // An empty cursor means the first page. A non-empty cursor is decoded and
-// strictly validated (decodeCursor) before any SQL — a malformed cursor returns
+// strictly validated (decodeCursor) before any SQL. A malformed cursor returns
 // shared.ErrInvalidPagination (400), never reaching the query.
 //
 // It fetches one extra row (limit+1) so it can tell whether a further page
@@ -155,14 +155,14 @@ func (s *defaultLogService) createLog(ctx context.Context, userID string, req Cr
 	return s.repo.createLog(ctx, userID, req.DateAndTime, req.Log)
 }
 
-// createLogs creates every entry atomically — any failure rolls back the lot —
+// createLogs creates every entry atomically (any failure rolls back the lot)
 // and returns the created entries in request order.
 //
 // THIS IS THE CANONICAL MULTI-STATEMENT TRANSACTION PATTERN FOR THE TEMPLATE.
 // Transaction control sits in the service layer: the service runs
 // db.WithTransaction and, inside the closure, constructs a repository over the
 // pgx.Tx. Repositories accept db.PgxIface, which pgx.Tx satisfies, so a
-// tx-scoped repository is just NewLogRepository(tx) — the same repository code
+// tx-scoped repository is just NewLogRepository(tx): the same repository code
 // runs inside and outside a transaction. Single-row methods above deliberately
 // do NOT use a transaction: a single statement is already atomic, so wrapping it
 // would add a round-trip for nothing. Reach for WithTransaction only when two or
@@ -173,9 +173,9 @@ func (s *defaultLogService) createLogs(ctx context.Context, userID string, reqs 
 	}
 
 	// Validate every entry up front (no DB work) so a malformed entry fails
-	// before a transaction — and its row locks — is ever opened. Same per-entry
+	// before a transaction (and its row locks) is ever opened. Same per-entry
 	// rules as a single create (rune limit + RFC3339 date). The error TYPE stays
-	// bounded; the failing index now reaches the client for BOTH failure kinds —
+	// bounded; the failing index now reaches the client for BOTH failure kinds:
 	// over-length via NewLogTooLongErrorAt and bad-date via InvalidDateTimeError
 	// (Field "date_and_time"), so the message reads "entry N: date_and_time: ...".
 	for i := range reqs {

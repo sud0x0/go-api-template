@@ -283,7 +283,7 @@ func TestLoad_CORSValidation(t *testing.T) {
 }
 
 // TestLoad_FailsOnInvertedTimeouts (item 7A) verifies that the validation in
-// Config.validate() rejects a WriteTimeout shorter than RequestTimeout —
+// Config.validate() rejects a WriteTimeout shorter than RequestTimeout,
 // otherwise slow responses get truncated mid-write before the handler
 // timeout fires.
 func TestLoad_FailsOnInvertedTimeouts(t *testing.T) {

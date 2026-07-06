@@ -8,11 +8,11 @@ import (
 
 // ErrorResponse is the JSON error envelope that API handlers and the public
 // router's 404/405 fallbacks return. (A few middleware-generated responses are
-// body-less by design — chi's Timeout 504 and Recoverer panic-500.)
+// body-less by design: chi's Timeout 504 and Recoverer panic-500.)
 //
 //	{"error": "<bounded_error_type>", "message": "<human-readable message>"}
 //
-// The `error` field is a bounded, machine-readable error type — it must come
+// The `error` field is a bounded, machine-readable error type: it must come
 // from a package-level constant (the feature packages' ErrType* constants),
 // never from err.Error() text of a lower layer. `message` is a human-readable
 // description safe to surface to clients.
@@ -26,8 +26,8 @@ type ErrorResponse struct {
 }
 
 // Router-level bounded error types. These belong here (not in a feature
-// package's ErrType* set) because they are emitted by the chi router itself —
-// for unmatched paths and disallowed methods — before any feature handler runs.
+// package's ErrType* set) because they are emitted by the chi router itself,
+// for unmatched paths and disallowed methods, before any feature handler runs.
 // They carry NO feature label and are NOT recorded on api_errors_total
 // (http_requests_total already counts them via the metrics middleware); they
 // exist only so the router's responses use the same JSON envelope as everything
@@ -41,7 +41,7 @@ const (
 	// Authentication failure (no/invalid Bearer token) is a 401 unauthorised;
 	// authorisation denial (OPA says no) is a 403 forbidden. Like the other
 	// router-level types they carry NO feature label and are NOT recorded on
-	// api_errors_total — that counter is for feature-handler errors, and these
+	// api_errors_total: that counter is for feature-handler errors, and these
 	// are rejected upstream. http_requests_total still counts them via the
 	// metrics middleware.
 	ErrTypeUnauthorised = "unauthorised"

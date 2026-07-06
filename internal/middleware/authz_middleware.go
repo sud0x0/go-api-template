@@ -18,7 +18,7 @@ import (
 )
 
 // errUndefinedDecision is returned when OPA responds 200 but with no "result"
-// key — an undefined decision (no matching rule and no default). It is a DENY.
+// key: an undefined decision (no matching rule and no default). It is a DENY.
 var errUndefinedDecision = errors.New("opa returned an undefined decision (no result)")
 
 // opaStatusError reports a non-200 response from OPA. The status is bounded
@@ -32,14 +32,14 @@ func (e *opaStatusError) Error() string {
 // This file implements LAYER 2 of the two-layer auth model: AUTHORISATION.
 //
 // After authentication (auth_middleware.go), this middleware asks an Open Policy
-// Agent (OPA) sidecar — over its REST Data API — whether the authenticated
+// Agent (OPA) sidecar, over its REST Data API, whether the authenticated
 // principal may perform the requested action on the requested resource, and
 // enforces the answer. This is FUNCTION-LEVEL authorisation only.
 //
 // It does NOT replace the repository's WHERE user_id = $N SQL scoping. That
 // remains the ROW-OWNERSHIP layer (defence in depth): OPA decides "may this role
 // call this endpoint", the SQL decides "may this user see this row". Collapsing
-// the two — e.g. pushing row filtering into OPA — is a mistake; keep them split
+// the two (e.g. pushing row filtering into OPA) is a mistake; keep them split
 // (see the wiring comment in cmd/api/main.go and .claude/rules/decisions.md).
 //
 // Communication is OPA's REST Data API over HTTP, NOT gRPC and NOT the Envoy
@@ -51,7 +51,7 @@ type opaRequest struct {
 	Input opaInput `json:"input"`
 }
 
-// opaInput is the decision input. Every field is BOUNDED — subject is an
+// opaInput is the decision input. Every field is BOUNDED: subject is an
 // internal UUID, roles are internal role names, action is a fixed verb, resource
 // is the chi ROUTE PATTERN (never the raw path), and method is the HTTP method.
 // Using the route pattern (e.g. /api/v1/logs/{id}) keeps the policy input a
@@ -66,7 +66,7 @@ type opaInput struct {
 
 // opaResponse is the OPA REST Data API response. Result is a POINTER so a body
 // with no "result" key (an undefined decision) decodes to nil and is treated as
-// a DENY, not a false-y allow — part of failing closed.
+// a DENY, not a false-y allow, part of failing closed.
 type opaResponse struct {
 	Result *bool `json:"result"`
 }
@@ -97,9 +97,9 @@ func NewOPAAuthorizer(cfg config.OPAConfig, log logger.Logger) *OPAAuthorizer {
 }
 
 // Handler is the net/http middleware. It builds the decision input, asks OPA,
-// and calls next ONLY on an explicit allow. Every failure path — a build error,
+// and calls next ONLY on an explicit allow. Every failure path (a build error,
 // a transport error, a timeout, a non-200 status, an undecodable body, or a
-// missing/false result — DENIES with a 403 in the JSON envelope.
+// missing/false result) DENIES with a 403 in the JSON envelope.
 //
 // FAIL CLOSED is the security-critical default (source: OPA's own
 // API-authorization guidance). An authorisation check that fails open turns any

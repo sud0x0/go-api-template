@@ -21,14 +21,14 @@ type CORSConfig struct {
 // enables it. Sending it by default is unsafe for APIs that don't use
 // credentialed requests and unnecessary for server-to-server callers.
 //
-// Never include "*" in production AllowedOrigins — always specify explicit
+// Never include "*" in production AllowedOrigins. Always specify explicit
 // origins. If your API has no browser clients (server-to-server only),
 // remove this middleware from the chain entirely.
 func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Always advertise that the response varies with Origin —
-			// even on rejected origins — so caches do not poison.
+			// Always advertise that the response varies with Origin,
+			// even on rejected origins, so caches do not poison.
 			w.Header().Add("Vary", "Origin")
 
 			origin := r.Header.Get("Origin")

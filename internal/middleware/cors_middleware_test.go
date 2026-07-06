@@ -16,7 +16,7 @@ func newRecorderRequest(origin string) (*httptest.ResponseRecorder, *http.Reques
 }
 
 // TestCORS_VaryOrigin_AlwaysSet (item 11) verifies the Vary: Origin header
-// is set on every response touched by the middleware — allowed OR rejected —
+// is set on every response touched by the middleware (allowed OR rejected)
 // so shared caches do not poison.
 func TestCORS_VaryOrigin_AlwaysSet(t *testing.T) {
 	mw := CORS(CORSConfig{AllowedOrigins: []string{"http://allowed.example"}})

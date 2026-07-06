@@ -11,11 +11,11 @@
 // otelhttp.NewTransport(httpClient.Transport) so W3C traceparent headers
 // propagate automatically too.
 //
-// Template surface: this package has no in-repo production caller by design —
+// Template surface: this package has no in-repo production caller by design.
 // it is the canonical outbound client for adopters' future features, and is
 // exercised by httpclient_test.go. `make deadcode` therefore flags New, Do, and
 // Get as unreachable from the two binaries' mains; that is expected, not dead
-// code — do not delete.
+// code. Do not delete.
 package httpclient
 
 import (
@@ -50,7 +50,7 @@ func New(httpClient *http.Client) *Client {
 //   - X-Request-ID: propagated from chi's RequestID middleware on the
 //     inbound request, so the downstream service logs the same ID.
 //
-// The returned response and error follow http.Client.Do semantics — callers
+// The returned response and error follow http.Client.Do semantics; callers
 // must close the response body.
 //
 // Callers should pass the inbound request's ctx (or a derived ctx) so the
@@ -60,10 +60,10 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	if reqID := chimw.GetReqID(ctx); reqID != "" {
 		req.Header.Set("X-Request-ID", reqID)
 	}
-	// Callers control the URL — this package is a generic outbound client.
+	// Callers control the URL; this package is a generic outbound client.
 	// SSRF defence belongs in the caller (URL allow-listing for any user-
 	// supplied URLs); this layer is correctly transport-only.
-	//nolint:gosec // G704 — URL provenance is the caller's responsibility
+	//nolint:gosec // G704: URL provenance is the caller's responsibility
 	return c.http.Do(req.WithContext(ctx))
 }
 

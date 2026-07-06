@@ -19,7 +19,7 @@ const healthcheckTimeout = 2 * time.Second
 //
 // It is a pure function for testability: it takes the args slice and
 // an output writer explicitly, so callers (main and tests) control
-// both inputs. It returns a decision — (shouldExit, exitCode) — and
+// both inputs. It returns a decision (shouldExit, exitCode) and
 // does not call os.Exit itself. main() applies the decision.
 //
 // Current flags:

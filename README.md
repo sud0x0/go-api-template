@@ -2,7 +2,7 @@
 
 > Please note that this project is still under development.
 
-A template for building REST APIs in Go, backed by PostgreSQL. Fork it, rename it, and add your features — the security, testing, and release tooling is already wired.
+A template for building REST APIs in Go, backed by PostgreSQL. Fork it, rename it, and add your features. The security, testing, and release tooling is already wired.
 
 ## Who it's for
 
@@ -42,7 +42,7 @@ The rest of this file is reference material. The [Quick start](#quick-start) get
 ├── api/v1/openapi.yaml              OpenAPI spec
 ├── cmd/
 │   ├── api/                         API server entrypoint (main + --version/--healthcheck CLI)
-│   └── migrate/                     go-api-migrator — embedded migrator binary
+│   └── migrate/                     go-api-migrator, embedded migrator binary
 ├── internal/
 │   ├── config/                      All env vars in one typed struct (incl. MigratorConfig)
 │   ├── db/                          pgxpool wrapper + PgxIface + WithTransaction
@@ -51,14 +51,14 @@ The rest of this file is reference material. The [Quick start](#quick-start) get
 │   ├── middleware/                  CORS, security headers, request logger
 │   ├── migrate/                     Migrator: destructive gate + pgx ConnConfig builder
 │   ├── shared/                      Limits, validation, rune validators, logger
-│   ├── userlog/                     Reference feature package — copy this for new features
+│   ├── userlog/                     Reference feature package, copy this for new features
 │   └── version/                     Build-time version metadata (ldflags)
 ├── migrations/                      SQL migrations + embed.FS
 ├── scripts/                         extract-changelog.sh and its Go tests
 ├── tests/                           Pretty test-output runner
 ├── .github/workflows/               release.yml (GoReleaser + SLSA L3), ci.yml
 ├── .goreleaser.yaml                 Release pipeline config
-├── CHANGELOG.md                     Hand-written; drives release notes
+├── CHANGELOG.md                     Hand-written, drives release notes
 ├── compose.dev.yaml                 Local Postgres + app (Air hot reload)
 ├── container.dev / container.prod   Dev (Air) / Prod (distroless multi-stage)
 └── Makefile                         All dev commands
@@ -81,8 +81,8 @@ make run               # start PostgreSQL and the API, with hot reload
 Confirm it works:
 
 ```bash
-curl http://localhost:8080/livez    # {"status":"alive"}   — the API is running
-curl http://localhost:8080/readyz   # {"status":"healthy"} — it can reach the database
+curl http://localhost:8080/livez    # {"status":"alive"}   the API is running
+curl http://localhost:8080/readyz   # {"status":"healthy"} it can reach the database
 ```
 
 Every route is protected by default, so a business call returns `401` until you add authentication:
@@ -93,7 +93,7 @@ curl http://localhost:8080/api/v1/logs   # {"error":"unauthorised", ...}
 
 The app opens two ports. Port `8080` serves the API and its health checks. Port `9090` is an internal admin port that mirrors the health checks. It has no login, so keep it off the public internet by using a firewall or a private network. The app serves no metrics scrape endpoint. It pushes metrics and traces to an OpenTelemetry Collector instead (see [Observability](#observability)).
 
-Forking this for your own project? Do the module rename first — see [Forking the template](#forking-the-template).
+Forking this for your own project? Do the module rename first. See [Forking the template](#forking-the-template).
 
 ---
 
@@ -106,13 +106,13 @@ git grep -l 'github.com/sud0x0/go-api-template' \
   | xargs sed -i 's|github.com/sud0x0/go-api-template|github.com/your/repo|g'
 ```
 
-Rename in **every** tracked file, not just `*.go`. The module path is also a `-ldflags -X` version-injection target in `.goreleaser.yaml` and `container.prod`, and it appears in doc comments (`internal/version/version.go`). Go silently drops an unmatched `-X` flag, so a `*.go`-only rename leaves every forked release and container reporting `dev`/`unknown` versions with no build error. (The old path is not in the changelog — it was reset at 0.1.0; the rename history lives in git.)
+Rename in **every** tracked file, not just `*.go`. The module path is also a `-ldflags -X` version-injection target in `.goreleaser.yaml` and `container.prod`, and it appears in doc comments (`internal/version/version.go`). Go silently drops an unmatched `-X` flag, so a `*.go`-only rename leaves every forked release and container reporting `dev`/`unknown` versions with no build error. (The old path is not in the changelog. It was reset at 0.1.0, and the rename history lives in git.)
 
 ---
 
 ## Configuration
 
-All env vars are read once at startup by [`internal/config`](internal/config/config.go) into a typed `Config`. There are no scattered `os.Getenv` calls anywhere else. Malformed numeric values (`DB_MAX_OPEN_CONNS=abc`) error at startup with the variable name and the bad value — no silent fallback.
+All env vars are read once at startup by [`internal/config`](internal/config/config.go) into a typed `Config`. There are no scattered `os.Getenv` calls anywhere else. Malformed numeric values (`DB_MAX_OPEN_CONNS=abc`) error at startup with the variable name and the bad value. There is no silent fallback.
 
 ### Required
 
@@ -125,7 +125,7 @@ All env vars are read once at startup by [`internal/config`](internal/config/con
 | Variable                          | Default      | Notes                                                                                             |
 | --------------------------------- | ------------ | ------------------------------------------------------------------------------------------------- |
 | `PORT`                            | `8080`       | Public API port                                                                                   |
-| `METRICS_PORT`                    | `9090`       | Internal admin port — restrict at infra layer                                                     |
+| `METRICS_PORT`                    | `9090`       | Internal admin port, restrict at infra layer                                                      |
 | `SERVER_READ_HEADER_TIMEOUT_SECS` | `5`          |                                                                                                   |
 | `SERVER_READ_TIMEOUT_SECS`        | `10`         |                                                                                                   |
 | `SERVER_WRITE_TIMEOUT_SECS`       | `65`         | Must be > `SERVER_REQUEST_TIMEOUT_SECS` (validated at startup)                                    |
@@ -153,13 +153,13 @@ All env vars are read once at startup by [`internal/config`](internal/config/con
 ./bin/go-api-migrator --version
 ```
 
-Both binaries print the same banner. For released builds the version metadata is injected by GoReleaser's `-ldflags` (see `.goreleaser.yaml`); a plain `go build` or `go run` falls back to `dev` / `unknown`.
+Both binaries print the same banner. For released builds the version metadata is injected by GoReleaser's `-ldflags` (see `.goreleaser.yaml`). A plain `go build` or `go run` falls back to `dev` / `unknown`.
 
 ---
 
 ## Adding a feature
 
-Every feature is a self-contained package — no cross-feature imports. Copy [`internal/userlog/`](internal/userlog/) and rename:
+Every feature is a self-contained package with no cross-feature imports. Copy [`internal/userlog/`](internal/userlog/) and rename:
 
 ```bash
 cp -r internal/userlog internal/order
@@ -175,7 +175,7 @@ Each file owns one layer:
 | `*_model.go`            | Types       | Domain struct, request DTOs, `Validate()`                         |
 | `*_errors.go`           | Errors      | Sentinel `Err*` + bounded `ErrType*` constants for metrics labels |
 | `*_repository.go`       | Data        | SQL constants + struct backed by `db.PgxIface`                    |
-| `*_service.go`          | Business    | Validation beyond schema; orchestration                           |
+| `*_service.go`          | Business    | Validation beyond schema and orchestration                        |
 | `*_handler.go`          | HTTP        | Decode → null-byte strip → validate → service → encode            |
 | `*_test.go`             | Unit        | pgxmock-backed                                                    |
 | `*_integration_test.go` | Integration | Real Postgres, build tag `integration`                            |
@@ -183,7 +183,7 @@ Each file owns one layer:
 Then:
 
 1. Write the SQL migration: `migrations/NNNNN_*.sql` with `-- +goose Up` / `-- +goose Down` blocks.
-2. Export `var RequiredTables = []string{"orders"}` from the feature's repository file and add `order.RequiredTables` to the `slices.Concat(...)` aggregation in [`cmd/api/main.go`](cmd/api/main.go). Startup refuses to boot if a required table is missing. (Schema verification is decoupled from `internal/db` — you never edit that core package.)
+2. Export `var RequiredTables = []string{"orders"}` from the feature's repository file and add `order.RequiredTables` to the `slices.Concat(...)` aggregation in [`cmd/api/main.go`](cmd/api/main.go). Startup refuses to boot if a required table is missing. (Schema verification is decoupled from `internal/db`. You never edit that core package.)
 3. Wire constructors in [`cmd/api/main.go`](cmd/api/main.go):
    ```go
    orderRepo := order.NewOrderRepository(database.Pool())
@@ -253,9 +253,9 @@ The login redirect, authorization-code exchange, PKCE, `state`/`nonce`, redirect
 
 ## Database
 
-[`internal/db`](internal/db/db.go) wraps `*pgxpool.Pool`. Repositories accept `db.PgxIface` — a three-method interface (`Exec`, `Query`, `QueryRow`) satisfied by both `*pgxpool.Pool` and `pgx.Tx`. The same repository code therefore runs inside and outside transactions, and is unit-testable with [pgxmock](https://github.com/pashagolub/pgxmock).
+[`internal/db`](internal/db/db.go) wraps `*pgxpool.Pool`. Repositories accept `db.PgxIface`, a three-method interface (`Exec`, `Query`, `QueryRow`) satisfied by both `*pgxpool.Pool` and `pgx.Tx`. The same repository code therefore runs inside and outside transactions, and is unit-testable with [pgxmock](https://github.com/pashagolub/pgxmock).
 
-Native pgx auto-prepares and caches statements per connection — no manual `Prepare`/`Close` bookkeeping anywhere.
+Native pgx auto-prepares and caches statements per connection, with no manual `Prepare`/`Close` bookkeeping anywhere.
 
 ### Transactions
 
@@ -268,31 +268,31 @@ err := database.WithTransaction(ctx, func(tx pgx.Tx) error {
 
 ### Schema verification at startup
 
-`db.New()` checks that every table in the `requiredTables` slice it is passed exists. The slice is aggregated in `cmd/api/main.go` via `slices.Concat(userlog.RequiredTables, …)` — each feature exports its own `RequiredTables`, so `internal/db` is never edited when a feature is added. If any table is missing, the process exits with a clear "run `make db-migrate`" message.
+`db.New()` checks that every table in the `requiredTables` slice it is passed exists. The slice is aggregated in `cmd/api/main.go` via `slices.Concat(userlog.RequiredTables, …)`. Each feature exports its own `RequiredTables`, so `internal/db` is never edited when a feature is added. If any table is missing, the process exits with a clear "run `make db-migrate`" message.
 
 ---
 
 ## Pagination
 
-`GET /api/v1/logs` supports two pagination modes. They are **mutually exclusive** — supplying both `cursor` and `offset` is a `400 invalid_pagination`.
+`GET /api/v1/logs` supports two pagination modes. They are **mutually exclusive**. Supplying both `cursor` and `offset` is a `400 invalid_pagination`.
 
 ### Which to use
 
-|                          | **Cursor (keyset)** — recommended                | **Offset** — legacy / shallow                                |
+|                          | **Cursor (keyset)**, recommended                 | **Offset**, legacy / shallow                                 |
 | ------------------------ | ------------------------------------------------ | ------------------------------------------------------------ |
 | Query                    | `?cursor=` (first page), then echo `next_cursor` | `?limit&offset`                                              |
 | Response                 | `{"logs":[…],"next_cursor":"…"}`                 | bare array `[…]`                                             |
 | Cost                     | constant per page (index seek)                   | grows with depth (walk-and-discard)                          |
-| Under concurrent inserts | stable — no shifted/duplicated rows              | pages shift; rows can repeat or be skipped                   |
-| Depth                    | unbounded                                        | **hard cap at `offset` 10000** — deeper rows are unreachable |
+| Under concurrent inserts | stable, no shifted/duplicated rows               | pages shift, rows can repeat or be skipped                   |
+| Depth                    | unbounded                                        | **hard cap at `offset` 10000**, deeper rows are unreachable  |
 
-**Use cursor pagination for anything that can exceed a few thousand rows or is read while being written.** Offset stays for shallow human browsing (jump to page N) and backwards compatibility, but its `10000` cap is a hard reachability limit, not a soft default — past it, switch to cursor.
+**Use cursor pagination for anything that can exceed a few thousand rows or is read while being written.** Offset stays for shallow human browsing (jump to page N) and backwards compatibility, but its `10000` cap is a hard reachability limit, not a soft default. Past it, switch to cursor.
 
 ### Cursor mechanics
 
-- The first cursor page is requested with an empty value: `GET /api/v1/logs?cursor=&limit=50`. Each response carries `next_cursor`; pass it back as `?cursor=<token>` for the next page. `next_cursor` is **omitted on the last page**.
-- The cursor is **opaque** — base64url of the last row's keyset `(date_and_time, id)`. Treat it as a token; do not construct or parse it client-side.
-- Ordering is `date_and_time DESC, id DESC`. `id` is the tiebreaker so rows that share a timestamp paginate deterministically (the offset query uses the same order and the same `(user_id, date_and_time DESC, id DESC)` index — migration `00002`).
+- The first cursor page is requested with an empty value: `GET /api/v1/logs?cursor=&limit=50`. Each response carries `next_cursor`. Pass it back as `?cursor=<token>` for the next page. `next_cursor` is **omitted on the last page**.
+- The cursor is **opaque**: base64url of the last row's keyset `(date_and_time, id)`. Treat it as a token. Do not construct or parse it client-side.
+- Ordering is `date_and_time DESC, id DESC`. `id` is the tiebreaker so rows that share a timestamp paginate deterministically (the offset query uses the same order and the same `(user_id, date_and_time DESC, id DESC)` index, migration `00002`).
 - A forged or tampered cursor **cannot cross user boundaries**: every query stays scoped by `user_id`. Cursor validation (strict RFC3339Nano + UUID parse, → `400` on anything malformed) exists to keep cast-error 500s and pathological values out of SQL, not for authorisation.
 
 ### Copying the pattern into a new feature
@@ -303,14 +303,14 @@ err := database.WithTransaction(ctx, func(tx pgx.Tx) error {
 
 ## Migrations
 
-The migrator is a separate binary at [`cmd/migrate`](cmd/migrate/main.go) (`go-api-migrator` — built by GoReleaser; `make prod-build` for a local snapshot). It embeds every `.sql` file under `migrations/` and applies them through goose's Provider API, serialised by a Postgres advisory lock.
+The migrator is a separate binary at [`cmd/migrate`](cmd/migrate/main.go) (`go-api-migrator`, built by GoReleaser. Use `make prod-build` for a local snapshot). It embeds every `.sql` file under `migrations/` and applies them through goose's Provider API, serialised by a Postgres advisory lock.
 
 ### Local development
 
 ```bash
 make db-migrate   # apply pending
 make db-status    # show applied / pending
-make db-reset     # roll back all  (dev-only — destructive gates inline)
+make db-reset     # roll back all  (dev-only, destructive gates inline)
 ```
 
 Internally each target execs `go run ./cmd/migrate …` inside the app container so it inherits the compose-provided env.
@@ -329,7 +329,7 @@ Subcommands:
 | Command                                   | Effect                      |
 | ----------------------------------------- | --------------------------- |
 | `up` / `up-by-one` / `up-to <v>`          | Apply migrations            |
-| `down` / `down-to <v>` / `redo` / `reset` | Roll back — **destructive** |
+| `down` / `down-to <v>` / `redo` / `reset` | Roll back, **destructive**  |
 | `status` / `db-version`                   | Read schema state           |
 
 Destructive commands require BOTH gates:
@@ -340,9 +340,9 @@ MIGRATOR_ALLOW_DESTRUCTIVE=true go-api-migrator --confirm-destructive down
 
 ### Operational rules
 
-1. **Expand / contract.** Every migration must be backwards-compatible with the currently-deployed API binary (rolling deploys run old code against new schema). Add columns as nullable or with defaults; drop columns only in a later release after no deployed binary reads them. Never rename in place — add, dual-write, drop later.
-2. **Direct Postgres connection required.** The session locker uses `pg_advisory_lock`, which is per-session. PgBouncer transaction/statement pooling breaks this — use session pooling or connect directly.
-3. **Tune timeouts.** `MIGRATOR_LOCK_TIMEOUT` (default `5s`) keeps a stalled lock acquire from blocking production writes. `MIGRATOR_STATEMENT_TIMEOUT` (default `10min`) — raise for migrations with data backfills; document the expected duration in the SQL file's header comment.
+1. **Expand / contract.** Every migration must be backwards-compatible with the currently-deployed API binary (rolling deploys run old code against new schema). Add columns as nullable or with defaults. Drop columns only in a later release after no deployed binary reads them. Never rename in place: add, dual-write, drop later.
+2. **Direct Postgres connection required.** The session locker uses `pg_advisory_lock`, which is per-session. PgBouncer transaction/statement pooling breaks this. Use session pooling or connect directly.
+3. **Tune timeouts.** `MIGRATOR_LOCK_TIMEOUT` (default `5s`) keeps a stalled lock acquire from blocking production writes. `MIGRATOR_STATEMENT_TIMEOUT` (default `10min`): raise for migrations with data backfills, and document the expected duration in the SQL file's header comment.
 4. **Never edit an applied migration.** Once a migration has run against any shared/production database, fixes go in a new file. Editing an applied file silently de-syncs `goose_db_version` across environments.
 
 ---
@@ -436,7 +436,7 @@ Every line is JSON to stdout (no log files, no rotation in the app, the orchestr
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | `time`                               | slog default, formatted RFC3339                                                                                        | every line                                                                    |
 | `level`, `msg`                       | slog default                                                                                                           | every line                                                                    |
-| `service`, `version`, `commit`       | `NewLogger(level, serviceName)` — bound once via `WithAttrs`; version/commit come from `internal/version` (`-ldflags`) | every line                                                                    |
+| `service`, `version`, `commit`       | `NewLogger(level, serviceName)`, bound once via `WithAttrs`, and version/commit come from `internal/version` (`-ldflags`) | every line                                                                    |
 | `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                    | every line emitted during an HTTP request                                     |
 | `trace_id`, `span_id`                | `RequestLogger` reads the active OTel span from the request context                                                    | every line during a request with a valid span (omitted when telemetry is off) |
 | `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                   | every line emitted _after_ auth fires                                         |
@@ -464,17 +464,17 @@ log = log.WithRequestContext(logger.RequestContext{UserID: userID})
 ctx = context.WithValue(r.Context(), logger.LoggerContextKey, log)
 ```
 
-`WithRequestContext` only adds non-empty fields, so you don't lose the request_id/method/path/ip already bound — they stay; user_id joins them.
+`WithRequestContext` only adds non-empty fields, so you don't lose the request_id/method/path/ip already bound. They stay, and user_id joins them.
 
 ### Health endpoints
 
 | Endpoint  | Purpose                                      | Use for                                    |
 | --------- | -------------------------------------------- | ------------------------------------------ |
-| `/livez`  | Process responsiveness; no dependency check  | k8s `livenessProbe`                        |
-| `/readyz` | Dependency check (DB ping); 503 if unhealthy | k8s `readinessProbe`, load-balancer health |
+| `/livez`  | Process responsiveness, no dependency check  | k8s `livenessProbe`                        |
+| `/readyz` | Dependency check (DB ping), 503 if unhealthy | k8s `readinessProbe`, load-balancer health |
 | `/health` | Alias for `/readyz`                          | Backwards-compatibility                    |
 
-`/readyz` and `/health` are mirrored on the internal admin port and, on the public listener, are gated by `PUBLIC_READINESS` (default `true`). The readiness result is cached for ~2s (concurrency-safe), and the cached DB ping runs on a context detached from the requesting client's cancellation — so a flood of probes collapses to at most one DB ping per window and a client aborting `/readyz` mid-ping cannot poison the shared result. Health endpoints (`/livez`, `/readyz`, `/health`) are **exempt** from the app-level rate limiter (a low `RATE_LIMIT_RPM` must never 429 liveness probes into a restart loop); they rely on the readiness cache and edge controls instead. Trade-off: exposing readiness publicly is convenient for external load-balancer health checks but discloses operational state and adds a (now-bounded) DB-ping vector — set `PUBLIC_READINESS=false` to keep it internal-only.
+`/readyz` and `/health` are mirrored on the internal admin port and, on the public listener, are gated by `PUBLIC_READINESS` (default `true`). The readiness result is cached for ~2s (concurrency-safe), and the cached DB ping runs on a context detached from the requesting client's cancellation, so a flood of probes collapses to at most one DB ping per window and a client aborting `/readyz` mid-ping cannot poison the shared result. Health endpoints (`/livez`, `/readyz`, `/health`) are **exempt** from the app-level rate limiter (a low `RATE_LIMIT_RPM` must never 429 liveness probes into a restart loop). They rely on the readiness cache and edge controls instead. Trade-off: exposing readiness publicly is convenient for external load-balancer health checks but discloses operational state and adds a (now-bounded) DB-ping vector. Set `PUBLIC_READINESS=false` to keep it internal-only.
 
 ### Configuration
 
@@ -507,25 +507,25 @@ Prometheus, Grafana, and alertmanager are deliberately separate concerns. The ap
 
 ### CORS
 
-Configured via `CORSConfig` in main.go. Origins from `CORS_ALLOWED_ORIGINS` (comma-separated, explicit origins only). The middleware matches origins exactly, so a wildcard entry is silently inert — **startup rejects any `*`** (and rejects `CORS_ALLOW_CREDENTIALS=true` with an empty origin list, which can never succeed). `Vary: Origin` is set on every response so shared caches don't poison. `Access-Control-Allow-Credentials: true` is emitted only when `CORS_ALLOW_CREDENTIALS=true`.
+Configured via `CORSConfig` in main.go. Origins from `CORS_ALLOWED_ORIGINS` (comma-separated, explicit origins only). The middleware matches origins exactly, so a wildcard entry is silently inert. **Startup rejects any `*`** (and rejects `CORS_ALLOW_CREDENTIALS=true` with an empty origin list, which can never succeed). `Vary: Origin` is set on every response so shared caches don't poison. `Access-Control-Allow-Credentials: true` is emitted only when `CORS_ALLOW_CREDENTIALS=true`.
 
 ### Client IP (`X-Forwarded-For`)
 
 `chimw.RealIP` resolves `X-Forwarded-For` / `X-Real-IP` onto `r.RemoteAddr` BEFORE the request logger, so the logged `ip` field is the resolved client IP, not the upstream proxy.
 
-> **Trust assumption:** `X-Forwarded-For` is client-spoofable. `RealIP` is therefore **opt-in** via `TRUST_PROXY_HEADERS` (default `false`) and is only registered when the app sits behind a trusted reverse proxy or load balancer that overwrites these headers on every request. With the default `false` the headers are ignored and `r.RemoteAddr` is the real peer — safe for an app exposed directly to the internet. Leaving it off while spoofable headers are honoured would also poison any IP-keyed rate limiter (see below).
+> **Trust assumption:** `X-Forwarded-For` is client-spoofable. `RealIP` is therefore **opt-in** via `TRUST_PROXY_HEADERS` (default `false`) and is only registered when the app sits behind a trusted reverse proxy or load balancer that overwrites these headers on every request. With the default `false` the headers are ignored and `r.RemoteAddr` is the real peer, safe for an app exposed directly to the internet. Leaving it off while spoofable headers are honoured would also poison any IP-keyed rate limiter (see below).
 
 ### Handled at the infrastructure layer
 
-- **HSTS** — at the reverse proxy or load balancer (TLS terminates outside the app).
-- **Rate limiting** — primarily at the proxy / API gateway / WAF (see [Deployment requirements](#deployment-requirements)). An opt-in app-level fallback exists (`RATE_LIMIT_RPM`) for edge-less deployments, disabled by default.
+- **HSTS**: at the reverse proxy or load balancer (TLS terminates outside the app).
+- **Rate limiting**: primarily at the proxy / API gateway / WAF (see [Deployment requirements](#deployment-requirements)). An opt-in app-level fallback exists (`RATE_LIMIT_RPM`) for edge-less deployments, disabled by default.
 
 ## Deployment requirements
 
 This template expects these controls to live **outside the application**, not in it:
 
-1. **TLS termination + HSTS.** TLS terminates outside the app; the app speaks plain HTTP behind the edge.
-2. **Rate limiting.** The edge is the **primary** rate-limit control — it sees the true client IP, holds a cluster-wide view, and can shed load before it reaches the app.
+1. **TLS termination + HSTS.** TLS terminates outside the app. The app speaks plain HTTP behind the edge.
+2. **Rate limiting.** The edge is the **primary** rate-limit control: it sees the true client IP, holds a cluster-wide view, and can shed load before it reaches the app.
 3. **An OpenTelemetry Collector.** Traces and metrics are pushed via OTLP, so a Collector must be reachable at `OTEL_EXPORTER_OTLP_ENDPOINT`. Run it as a separate process (sidecar, per-node agent, or gateway per the [Collector deployment guide](https://opentelemetry.io/docs/collector/deploy/)), never inside the app image. If the endpoint is unset the app still runs with telemetry disabled.
 
 The app ships an **opt-in fallback limiter** (`RATE_LIMIT_RPM`, default `0` = disabled, keyed by client IP) for deployments that genuinely have no edge limiter. Two caveats make it a fallback, not a replacement:
@@ -533,38 +533,38 @@ The app ships an **opt-in fallback limiter** (`RATE_LIMIT_RPM`, default `0` = di
 - **Per-instance counters.** `httprate` counts in memory per process, so with `N` replicas the effective global limit is `RATE_LIMIT_RPM × N`. A true global limit belongs at the edge.
 - **IP keying needs trusted proxy headers.** If the app is behind a proxy but `TRUST_PROXY_HEADERS=false`, every request carries the proxy's IP, so all traffic shares one bucket and the limiter self-DoSes the API. The app logs a startup warning when `RATE_LIMIT_RPM > 0` while `TRUST_PROXY_HEADERS=false`.
 
-The limiter applies only to business routes (`/api/v1/*` and any future routes added to that group); the health endpoints (`/livez`, `/readyz`, `/health`) are exempt so probes are never throttled into a restart loop. When the limiter fires it returns `429` with the standard JSON error envelope (`{"error":"rate_limited",…}`). In edge-limited deployments the `429` may instead come from the upstream gateway, whose body shape is its own.
+The limiter applies only to business routes (`/api/v1/*` and any future routes added to that group). The health endpoints (`/livez`, `/readyz`, `/health`) are exempt so probes are never throttled into a restart loop. When the limiter fires it returns `429` with the standard JSON error envelope (`{"error":"rate_limited",…}`). In edge-limited deployments the `429` may instead come from the upstream gateway, whose body shape is its own.
 
-**After auth lands:** re-key the limiter by user ID for business-aware, per-endpoint limits — the per-IP key is a coarse pre-auth stopgap.
+**After auth lands:** re-key the limiter by user ID for business-aware, per-endpoint limits. The per-IP key is a coarse pre-auth stopgap.
 
 ---
 
 ## Coding rules
 
-1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer; the API relies on `json.Encoder`'s HTML escaping (`<` → `<` etc.) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes` (Postgres `TEXT` cannot store `\x00`).
-2. **Type and validate inputs.** UUID path params via `uuid.Parse` so a malformed id never reaches the database. Length limits via `rune_max` / `rune_min` / `rune_len` tags — rune count matches Postgres `VARCHAR(N)` semantics.
-3. **Validate database output.** Every row read from Postgres is re-checked via `Model.Validate()` (defence in depth — a schema migration drift would surface here, not later in business logic).
+1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer. The API relies on `json.Encoder`'s HTML escaping (`<` → `<` etc.) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes` (Postgres `TEXT` cannot store `\x00`).
+2. **Type and validate inputs.** UUID path params via `uuid.Parse` so a malformed id never reaches the database. Length limits via `rune_max` / `rune_min` / `rune_len` tags. Rune count matches Postgres `VARCHAR(N)` semantics.
+3. **Validate database output.** Every row read from Postgres is re-checked via `Model.Validate()` (defence in depth: a schema migration drift would surface here, not later in business logic).
 4. **Authenticate by default.** Every API endpoint requires authentication unless explicitly excluded.
 5. **Authorise in the repository.** Every query has `WHERE … AND user_id = $N`. No filtering in the handler that the database can do.
-6. **Validate file uploads.** MIME type, file extension, size limit. None are implemented in the template — add them when you add an upload endpoint.
+6. **Validate file uploads.** MIME type, file extension, size limit. None are implemented in the template. Add them when you add an upload endpoint.
 
-> Validate on input, parameterise on storage, encode on output — at each language boundary, using the tool that owns that boundary. Input sanitisation sits _below_ those three in OWASP's defence hierarchy ([Input Validation](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html) and [XSS Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)): use it only when the destination language structurally cannot hold the input — this codebase's only case is `shared.SanitiseNullBytes`, because Postgres `TEXT` rejects `\x00`. Never use sanitisation as a substitute for validation, never to "neutralise" XSS (that belongs at the renderer, in the renderer's templating engine), and never as a "be safe" reflex on every string. Sanitisation silently mutates user data, gives false confidence in places where the actual defence is elsewhere, and when applied repeatedly across round-trips causes double-encoding bugs that are painful to debug.
+> Validate on input, parameterise on storage, encode on output, at each language boundary, using the tool that owns that boundary. Input sanitisation sits _below_ those three in OWASP's defence hierarchy ([Input Validation](https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html) and [XSS Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html)): use it only when the destination language structurally cannot hold the input. This codebase's only case is `shared.SanitiseNullBytes`, because Postgres `TEXT` rejects `\x00`. Never use sanitisation as a substitute for validation, never to "neutralise" XSS (that belongs at the renderer, in the renderer's templating engine), and never as a "be safe" reflex on every string. Sanitisation silently mutates user data, gives false confidence in places where the actual defence is elsewhere, and when applied repeatedly across round-trips causes double-encoding bugs that are painful to debug.
 
 ---
 
 ## Scaling
 
-This template follows the [12-factor](https://12factor.net/concurrency) process model: scale by running **more processes**, not by making one process bigger. The API is stateless, so horizontal scale is `N` identical instances behind a load balancer — no session affinity needed.
+This template follows the [12-factor](https://12factor.net/concurrency) process model: scale by running **more processes**, not by making one process bigger. The API is stateless, so horizontal scale is `N` identical instances behind a load balancer. No session affinity needed.
 
 ### Sizing the connection pool
 
 `DB_MAX_OPEN_CONNS` is **per instance**, not cluster-wide. If you run 4 instances with `DB_MAX_OPEN_CONNS=25`, you have a 100-connection ceiling at Postgres. Set Postgres' `max_connections` accordingly (plus headroom for the migrator and any maintenance sessions).
 
-`DB_MIN_CONNS` controls how many connections each instance eagerly warms up. With 4 instances at `DB_MIN_CONNS=10`, you have 40 idle connections waiting at all times. Tune low if you scale aggressively up and down; tune high if your traffic is steady and you want first-request latency to be low.
+`DB_MIN_CONNS` controls how many connections each instance eagerly warms up. With 4 instances at `DB_MIN_CONNS=10`, you have 40 idle connections waiting at all times. Tune low if you scale aggressively up and down. Tune high if your traffic is steady and you want first-request latency to be low.
 
 ### When you need a worker process type
 
-If you have **async work** — sending emails, processing webhooks, retrying failed external calls, batch jobs, scheduled tasks — do **not** run them inside the API process. Two reasons:
+If you have **async work** (sending emails, processing webhooks, retrying failed external calls, batch jobs, scheduled tasks), do **not** run them inside the API process. Two reasons:
 
 1. The job blocks the HTTP request that triggered it. Slow jobs mean slow API responses.
 2. The job does not survive `SIGTERM` during a deploy. Mid-execution jobs are lost unless your queue handles redelivery.
@@ -603,9 +603,9 @@ Add `REDIS_URL` + `REDIS_POOL_SIZE` to `.env.example`. No `os.Getenv` outside `i
 
 | Need                                                     | Use                                                                                                       |
 | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Job queue with retries, scheduled, priority, idempotency | [`hibiken/asynq`](https://github.com/hibiken/asynq) (Redis-backed; production-ready; ships with a web UI) |
+| Job queue with retries, scheduled, priority, idempotency | [`hibiken/asynq`](https://github.com/hibiken/asynq) (Redis-backed, production-ready, ships with a web UI) |
 | Lightweight pub/sub or streams                           | [`redis/go-redis/v9`](https://github.com/redis/go-redis) directly with Redis Streams                      |
-| Distributed cache / rate limiting                        | `redis/go-redis/v9` — no queue layer needed                                                               |
+| Distributed cache / rate limiting                        | `redis/go-redis/v9`, no queue layer needed                                                                |
 
 This template doesn't include any of them by default. Add what you actually need.
 
@@ -626,7 +626,7 @@ func (h *Handler) SendEmail(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-The queue client is injected into the handler the same way `HandlerMetrics` is — through the constructor, no globals.
+The queue client is injected into the handler the same way `HandlerMetrics` is, through the constructor, no globals.
 
 #### 4. Add the worker binary
 
@@ -637,15 +637,15 @@ internal/jobs/          # job handler functions, following the userlog layered p
 
 `cmd/worker/main.go` mirrors `cmd/api/main.go`:
 
-- Load config (same `config.Load()` — already reads `REDIS_URL`).
-- Create the logger (`logger.NewLogger(cfg.Log.Level, "go-api-worker")` — note the distinct service name).
+- Load config (same `config.Load()`, already reads `REDIS_URL`).
+- Create the logger (`logger.NewLogger(cfg.Log.Level, "go-api-worker")`, note the distinct service name).
 - Open the DB pool (same `db.New(...)`).
 - Initialise telemetry and metrics (same `observability.Init(...)` then `metrics.New()`).
 - Start an asynq.Server (or a Redis Streams consumer loop).
 - Bind `/livez` + `/readyz` on `:METRICS_PORT` so k8s can probe it.
-- Graceful shutdown on SIGINT/SIGTERM — drain in-flight jobs before exiting.
+- Graceful shutdown on SIGINT/SIGTERM: drain in-flight jobs before exiting.
 
-Job handler functions live in `internal/jobs/` and follow the same layered pattern as `internal/userlog/` — handler / service / repository. The handler in this case is the `asynq.HandlerFunc`, not an HTTP handler.
+Job handler functions live in `internal/jobs/` and follow the same layered pattern as `internal/userlog/`: handler / service / repository. The handler in this case is the `asynq.HandlerFunc`, not an HTTP handler.
 
 #### 5. Wire the worker into the release pipeline
 
@@ -673,9 +673,9 @@ GoReleaser produces all three binaries on the same release tag. Deploy them toge
 
 If you need Redis for caching (session data, rate-limit counters, computed responses) rather than a queue:
 
-- Use `redis/go-redis/v9` directly — no queue layer needed.
+- Use `redis/go-redis/v9` directly, no queue layer needed.
 - Wrap Get/Set/Del in a `internal/cache/` package so feature code doesn't know it's Redis.
-- **Do not** cache in process memory (`sync.Map`, package-level maps). That breaks the stateless-process rule and your cache is per-instance — useless for sharing rate limits.
+- **Do not** cache in process memory (`sync.Map`, package-level maps). That breaks the stateless-process rule and your cache is per-instance, useless for sharing rate limits.
 - Set explicit TTLs on every key. Unbounded caches grow until Redis OOMs.
 
 ### What to delete from the template if you don't need Redis
@@ -688,16 +688,16 @@ Most APIs do not need a worker process to start. Don't add Redis pre-emptively. 
 
 Releases are cut by pushing a `v*` tag. [`.github/workflows/release.yml`](.github/workflows/release.yml) runs GoReleaser, which produces:
 
-- Static binaries for linux/darwin/windows × amd64/arm64 (windows/arm64 skipped) — both `go-api` and `go-api-migrator`
-- `checksums.txt` — SHA-256 over every binary
-- `<binary>.sbom.json` — one SPDX-JSON SBOM per binary, generated by syft
-- `multiple.intoto.jsonl` — SLSA Level 3 provenance, generated by the [`slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator) reusable workflow
+- Static binaries for linux/darwin/windows × amd64/arm64 (windows/arm64 skipped), both `go-api` and `go-api-migrator`
+- `checksums.txt`: SHA-256 over every binary
+- `<binary>.sbom.json`: one SPDX-JSON SBOM per binary, generated by syft
+- `multiple.intoto.jsonl`: SLSA Level 3 provenance, generated by the [`slsa-github-generator`](https://github.com/slsa-framework/slsa-github-generator) reusable workflow
 
 ### Release notes come from CHANGELOG.md
 
-[`scripts/extract-changelog.sh`](scripts/extract-changelog.sh) extracts the `## [X.Y.Z]` section from [CHANGELOG.md](CHANGELOG.md) and passes it to GoReleaser via `--release-notes`. The workflow FAILS if the section is missing or empty — no tag gets released without a hand-written entry. **Commit messages do not feed the changelog.** There is no commit-format enforcement and no commit-derived changelog generation.
+[`scripts/extract-changelog.sh`](scripts/extract-changelog.sh) extracts the `## [X.Y.Z]` section from [CHANGELOG.md](CHANGELOG.md) and passes it to GoReleaser via `--release-notes`. The workflow FAILS if the section is missing or empty. No tag gets released without a hand-written entry. **Commit messages do not feed the changelog.** There is no commit-format enforcement and no commit-derived changelog generation.
 
-The trade-off you accept by choosing manual changelogs: every release costs a few minutes of writing; in exchange the changelog reflects what the binary user cares about, not what the commit graph happens to record.
+The trade-off you accept by choosing manual changelogs: every release costs a few minutes of writing. In exchange the changelog reflects what the binary user cares about, not what the commit graph happens to record.
 
 ### Cutting a release
 
@@ -735,10 +735,10 @@ slsa-verifier verify-artifact <binary> \
 
 | Job                 | Catches                                                                                                                             |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `pre-commit`        | Hooks bypassed locally with `--no-verify` — mandatory here. Pinned tool versions (golangci-lint, govulncheck, semgrep, pre-commit). |
+| `pre-commit`        | Hooks bypassed locally with `--no-verify`, mandatory here. Pinned tool versions (golangci-lint, govulncheck, semgrep, pre-commit). |
 | `test`              | `go build`, `go vet`, `go test -race`                                                                                               |
 | `test-integration`  | Postgres 16 service container, `go run ./cmd/migrate up`, then `go test -race -tags integration ./...`                              |
-| `goreleaser-config` | `goreleaser check` + `extract-changelog.sh` fixture tests — broken release config or script is caught on PR, not at tag time        |
+| `goreleaser-config` | `goreleaser check` + `extract-changelog.sh` fixture tests: broken release config or script is caught on PR, not at tag time         |
 
 ### Pre-commit hooks (run locally + in CI)
 
@@ -768,7 +768,7 @@ docs: document the verification loop
 
 Breaking changes append `!` to the type/scope and add a `BREAKING CHANGE:` footer (the historical module rename would have been `refactor!:`).
 
-This is a **request, not an enforced gate** — no hook or CI job rejects other formats, and history before this point predates the convention. The local gate is `make ci` (no podman) after every change and `make verify` (podman) before a commit; see the [Makefile reference](#makefile-reference).
+This is a **request, not an enforced gate**. No hook or CI job rejects other formats, and history before this point predates the convention. The local gate is `make ci` (no podman) after every change and `make verify` (podman) before a commit. See the [Makefile reference](#makefile-reference).
 
 ---
 
@@ -798,7 +798,7 @@ This is a **request, not an enforced gate** — no hook or CI job rejects other 
 | ------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `make ci`                             | Umbrella gate (no podman): `go build` + `go vet` + `golangci-lint` + race unit tests      |
 | `make verify`                         | Full pre-commit gate (podman): `ci` + integration tests                                   |
-| `make test-unit`                      | Race-enabled unit tests (pgxmock — no real DB needed). `make test` is a deprecated alias. |
+| `make test-unit`                      | Race-enabled unit tests (pgxmock, no real DB needed). `make test` is a deprecated alias. |
 | `make test-pretty`                    | Table-formatted output over the same `-race` unit suite                                   |
 | `make test-integration`               | Real-Postgres integration tests (requires `make run`)                                     |
 | `make test-scripts`                   | Shell-script Go tests (extract-changelog fixture)                                         |
@@ -808,18 +808,18 @@ This is a **request, not an enforced gate** — no hook or CI job rejects other 
 
 ### Release
 
-There are no hand-rolled `build-binary` / `build-migrator` / `build-prod` targets. Release-shaped binaries come from a single source — GoReleaser — both locally (via the snapshot below) and in CI. `internal/version` is populated by GoReleaser's `-ldflags` only; the Makefile contains no `LDFLAGS` or version metadata, so the two paths can't drift.
+There are no hand-rolled `build-binary` / `build-migrator` / `build-prod` targets. Release-shaped binaries come from a single source, GoReleaser, both locally (via the snapshot below) and in CI. `internal/version` is populated by GoReleaser's `-ldflags` only. The Makefile contains no `LDFLAGS` or version metadata, so the two paths can't drift.
 
 | Command                              | Description                                                                                                                                             |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `make prod-build`                    | Local snapshot via GoReleaser — cross-compiled binaries in `dist/`, no SBOM (skip syft), no publish                                                     |
+| `make prod-build`                    | Local snapshot via GoReleaser: cross-compiled binaries in `dist/`, no SBOM (skip syft), no publish                                                      |
 | `make goreleaser-check`              | Full release-pipeline pre-flight: config validate + extract-changelog tests + full snapshot + SLSA-subjects jq replay + native binary `--version` smoke |
 | `make changelog-check VERSION=x.y.z` | Verify CHANGELOG has a non-empty section for the version (no leading `v`)                                                                               |
 
-For a dev one-off binary just use `go build` or `go run` directly — those don't carry release ldflags and aren't meant to.
+For a dev one-off binary just use `go build` or `go run` directly. Those don't carry release ldflags and aren't meant to.
 
 ---
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md). The format is [Keep a Changelog](https://keepachangelog.com). The release workflow extracts the relevant section automatically — a release fails if it's missing.
+See [CHANGELOG.md](CHANGELOG.md). The format is [Keep a Changelog](https://keepachangelog.com). The release workflow extracts the relevant section automatically. A release fails if it's missing.

@@ -20,7 +20,7 @@ import (
 // and maps the caller's identity to the internal UUID via shared.WithUserID.
 // Layer 2 (authorisation) is the OPA middleware in authz_middleware.go.
 //
-// OUT OF SCOPE (deliberately, not forgotten — see .claude/rules/decisions.md and
+// OUT OF SCOPE (deliberately, not forgotten, see .claude/rules/decisions.md and
 // the ASVS map V10): the login redirect, authorization-code exchange, PKCE, the
 // `state`/`nonce` parameters, redirect-URI registration, refresh-token rotation,
 // consent, and back-channel logout. Those are authorization-SERVER and browser-
@@ -42,7 +42,7 @@ var authAllowedSigningAlgs = []string{oidc.RS256, oidc.ES256}
 // UUID from an external (issuer, subject) pair. It is a constant so the mapping
 // is deterministic and reproducible across restarts and replicas with no lookup
 // table. Changing it would re-map every existing user to a new UUID, so it is
-// frozen — treat it like a schema constant.
+// frozen. Treat it like a schema constant.
 var subjectNamespace = uuid.MustParse("a1e0f7d2-3b4c-4d5e-8f60-71829a3b4c5d")
 
 // tokenVerifier is the subset of *oidc.IDTokenVerifier the middleware needs.
@@ -56,7 +56,7 @@ type tokenVerifier interface {
 // OIDCAuthenticator is the resource-server authentication middleware. Build it
 // ONCE at startup with NewOIDCAuthenticator (which performs OIDC discovery and
 // caches the provider + verifier); the per-request Handler then does no
-// discovery and no key fetch on the hot path — go-oidc's RemoteKeySet fetches
+// discovery and no key fetch on the hot path. go-oidc's RemoteKeySet fetches
 // and rotates the JWKS in the background.
 type OIDCAuthenticator struct {
 	verifier tokenVerifier
@@ -66,23 +66,23 @@ type OIDCAuthenticator struct {
 // NewOIDCAuthenticator performs OIDC discovery against cfg.IssuerURL and returns
 // an authenticator whose verifier is configured to:
 //
-//   - V9.1.1 — verify the token's signature (go-oidc's KeySet does this against
+//   - V9.1.1: verify the token's signature (go-oidc's KeySet does this against
 //     the discovered JWKS before any claim is trusted).
-//   - V9.1.2 — accept ONLY algorithms on authAllowedSigningAlgs; the 'none'
+//   - V9.1.2: accept ONLY algorithms on authAllowedSigningAlgs; the 'none'
 //     algorithm is never on the list, so an unsigned token is rejected.
-//   - V9.1.3 — take key material ONLY from the JWKS discovered at the trusted
+//   - V9.1.3: take key material ONLY from the JWKS discovered at the trusted
 //     issuer. go-oidc's RemoteKeySet fetches keys from the discovery document's
 //     jwks_uri and NEVER honours a token-supplied `jku`, `x5u`, or `jwk` header,
 //     so an attacker cannot point verification at a key they control.
-//   - V9.2.1 — reject tokens outside their exp/nbf validity window.
-//   - V9.2.3 / V10.3.1 — validate the `aud` claim against cfg.Audience (passed
+//   - V9.2.1: reject tokens outside their exp/nbf validity window.
+//   - V9.2.3 / V10.3.1: validate the `aud` claim against cfg.Audience (passed
 //     as the verifier's ClientID).
-//   - V10.5.3 — require the discovered issuer to match cfg.IssuerURL EXACTLY.
+//   - V10.5.3: require the discovered issuer to match cfg.IssuerURL EXACTLY.
 //     oidc.NewProvider enforces this and we deliberately do NOT use
 //     oidc.InsecureIssuerURLContext (which relaxes it for off-spec providers
 //     such as Azure); relaxing issuer validation is an insecure opt-in we do not
 //     expose. If an adopter genuinely needs it, they add it here as a documented
-//     insecure flag — it is absent by design.
+//     insecure flag. It is absent by design.
 //
 // Discovery makes a network call, so pass a context with a sensible startup
 // timeout. A discovery failure is fatal: the app must not boot with auth
@@ -113,7 +113,7 @@ type tokenClaims struct {
 // internal roles from the authentication middleware (which sets them) to the
 // authorisation middleware (which reads them into the OPA input). It is
 // unexported and private to internal/middleware because roles are an
-// infrastructure detail shared only between these two middlewares — feature
+// infrastructure detail shared only between these two middlewares. Feature
 // packages never read them (they authorise by user_id in SQL). The key is NOT
 // in internal/shared because, unlike the user ID, no feature package needs it.
 type rolesContextKey struct{}
@@ -133,7 +133,7 @@ func rolesFromContext(ctx context.Context) []string {
 
 // mapClaimsToRoles is the VENDOR-AGNOSTIC role boundary. IdP tokens carry
 // vendor-specific role/group claims; the OPA policy is written against INTERNAL
-// role names. Mapping here — at the authentication boundary — means the IdP and
+// role names. Mapping here, at the authentication boundary, means the IdP and
 // the policy are independently swappable: change IdPs and you only re-point this
 // function, the policy is untouched.
 //
@@ -162,7 +162,7 @@ func mapClaimsToRoles(roles, groups []string) []string {
 // the Bearer access token, then stores the caller's internal UUID on the request
 // context via shared.WithUserID so downstream handlers and repositories are
 // user-scoped. Any failure short-circuits with a 401 in the JSON envelope and a
-// `WWW-Authenticate: Bearer` header — the request never reaches a feature
+// `WWW-Authenticate: Bearer` header. The request never reaches a feature
 // handler unauthenticated.
 func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -182,7 +182,7 @@ func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// V9.2.2 — token type. Only ACCESS tokens may drive authorisation; an id
+		// V9.2.2: token type. Only ACCESS tokens may drive authorisation; an id
 		// token proves authentication to a client and must not be accepted here.
 		// There is no universal claim distinguishing the two: RFC 9068 marks
 		// access tokens with a JOSE header `typ: at+jwt` that go-oidc does not
@@ -200,7 +200,7 @@ func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// V10.3.3 / V10.5.2 — identify the user from claims that cannot be
+		// V10.3.3 / V10.5.2: identify the user from claims that cannot be
 		// reassigned: the (issuer, subject) pair, never a mutable claim like email.
 		// idToken.Issuer is already validated to equal the configured issuer, and
 		// idToken.Subject is the IdP's stable subject id.
@@ -231,7 +231,7 @@ func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 //
 // This is the TEMPLATE's choice for a zero-infrastructure default. A real
 // deployment may instead keep a `users` table mapping (iss, sub) → an internal
-// id and resolve it in this middleware before WithUserID — swap the body of this
+// id and resolve it in this middleware before WithUserID: swap the body of this
 // function for that lookup. Either way, UserIDFromContext still enforces the
 // UUID shape at the single read point.
 func MapSubjectToUUID(issuer, subject string) string {

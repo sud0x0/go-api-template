@@ -55,7 +55,7 @@ func TestRuneCountLen(t *testing.T) {
 }
 
 // TestValidatePagination_DefaultLimitWhenOmitted asserts that the limit
-// applied when ?limit is omitted equals DefaultPageSize — the single source of
+// applied when ?limit is omitted equals DefaultPageSize, the single source of
 // truth shared with the OpenAPI spec (see internal/contract) and the userlog
 // service. If someone changes DefaultPageSize, this test follows it; if someone
 // reintroduces a divergent literal default, the contract test catches it.

@@ -99,9 +99,9 @@ func RuneCountLen(s string) int {
 // RegisterRuneLenValidators adds three custom rules to a
 // go-playground/validator instance:
 //
-//	rune_max — max number of runes allowed
-//	rune_min — min number of runes required
-//	rune_len — exact rune length
+//	rune_max: max number of runes allowed
+//	rune_min: min number of runes required
+//	rune_len: exact rune length
 //
 // All three operate on string fields. On a *string field, nil is
 // treated as rune count 0 (so tie them with `omitempty` where null

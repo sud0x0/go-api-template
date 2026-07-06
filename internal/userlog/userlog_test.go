@@ -3,7 +3,7 @@ package userlog
 // These are UNIT tests using pgxmock. They exercise the handler → service →
 // repository chain end-to-end inside the process, but with a mock database.
 // They do not catch SQL syntax errors, schema mismatches, or driver-level
-// encoding bugs — for those see log_integration_test.go (build tag
+// encoding bugs. For those see log_integration_test.go (build tag
 // `integration`) which runs against a real Postgres.
 
 import (
@@ -68,7 +68,7 @@ func newTestHandlerMetrics() *testHandlerMetrics {
 // mirroring db.DB.WithTransaction: it Begins on the mock, runs fn with the
 // resulting pgx.Tx (which the repository can be built over), and commits or
 // rolls back. Tests drive it with mock.ExpectBegin / ExpectQuery / ExpectCommit
-// / ExpectRollback — the same pattern internal/db's transaction tests use.
+// / ExpectRollback, the same pattern internal/db's transaction tests use.
 type mockTxRunner struct{ pool pgxmock.PgxPoolIface }
 
 func (m *mockTxRunner) WithTransaction(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -142,7 +142,7 @@ func createRequest(method, path string, body []byte, urlParams map[string]string
 }
 
 // createRequestNoUser is like createRequest but doesn't set the user ID in
-// context — used to trigger the unauthorised path.
+// context, used to trigger the unauthorised path.
 func createRequestNoUser(method, path string, body []byte, urlParams map[string]string) *http.Request {
 	req := httptest.NewRequest(method, path, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -379,7 +379,7 @@ func TestLogHandler(t *testing.T) {
 			t.Fatalf("Failed to unmarshal: %v", err)
 		}
 		if response.Log != raw {
-			t.Errorf("HTML stripped — got %q, want %q (item 10 mandates preservation)", response.Log, raw)
+			t.Errorf("HTML stripped: got %q, want %q (item 10 mandates preservation)", response.Log, raw)
 		}
 
 		if err := mock.ExpectationsWereMet(); err != nil {
@@ -472,8 +472,8 @@ func TestLogHandler(t *testing.T) {
 
 	// NOTE: TEST 10: LOG TOO LONG (ASCII) → limit_exceeded counted, with the
 	// structured JSON body reaching the client. The length limit is enforced
-	// in the service (no rune_max struct tag), so the LimitExceededError —
-	// carrying the limit and the client's current count — is returned, not a
+	// in the service (no rune_max struct tag), so the LimitExceededError,
+	// carrying the limit and the client's current count, is returned, not a
 	// generic validation 400.
 	t.Run("Log Too Long", func(t *testing.T) {
 		handler, _, errCV, cleanup := setupTestStack(t)
@@ -752,7 +752,7 @@ func TestLogHandler(t *testing.T) {
 // TestHandler_NonUUIDUserReturns401 verifies the UUID user-ID contract at the
 // handler boundary: a request whose context carries a non-UUID subject (an
 // unmapped OAuth `sub`) is rejected as 401 in the envelope, error_type is
-// "unauthorised" (NOT "database"), and NO query reaches the pool — the
+// "unauthorised" (NOT "database"), and NO query reaches the pool; the
 // misconfigured integration is never misfiled as a database fault.
 func TestHandler_NonUUIDUserReturns401(t *testing.T) {
 	handler, mock, cv, cleanup := setupTestStack(t)
@@ -788,8 +788,8 @@ func TestHandler_NonUUIDUserReturns401(t *testing.T) {
 }
 
 // TestPathUUIDCanonicalised verifies that UUID path params in non-canonical
-// (but uuid.Parse-accepted) forms — the `urn:uuid:` prefix and `{...}` braces,
-// both of which Postgres' uuid type rejects — are canonicalised before reaching
+// (but uuid.Parse-accepted) forms (the `urn:uuid:` prefix and `{...}` braces,
+// both of which Postgres' uuid type rejects) are canonicalised before reaching
 // the repository. The request succeeds and the DB sees the bare canonical UUID,
 // so a 500 from a Postgres syntax error is impossible.
 func TestPathUUIDCanonicalised(t *testing.T) {
@@ -884,8 +884,8 @@ func TestDecodeJSONBodyStrict(t *testing.T) {
 
 // TestRequestBodyTooLarge verifies that a body over the 1 MiB cap surfaces as
 // 413 (not 400) in the standard error envelope. The request is driven through a
-// router that includes chimw.RequestSize(1<<20) — the same middleware main.go
-// wires — so r.Body is wrapped in an http.MaxBytesReader and decode returns an
+// router that includes chimw.RequestSize(1<<20), the same middleware main.go
+// wires, so r.Body is wrapped in an http.MaxBytesReader and decode returns an
 // *http.MaxBytesError, which the handler distinguishes from a malformed body.
 func TestRequestBodyTooLarge(t *testing.T) {
 	const bodyCap = 1 << 20 // 1 MiB, matching cmd/api/main.go
@@ -1110,7 +1110,7 @@ func TestBatchCreate_BadDateNamesIndex(t *testing.T) {
 	body, _ := json.Marshal(BatchCreateRequest{Logs: []CreateRequest{
 		{DateAndTime: "2025-12-28T10:30:00Z", Log: "a"},
 		{DateAndTime: "2025-12-28T10:30:00Z", Log: "b"},
-		{DateAndTime: "not-a-date", Log: "c"}, // index 2 — the failing entry
+		{DateAndTime: "not-a-date", Log: "c"}, // index 2, the failing entry
 	}})
 	req := createRequest(http.MethodPost, "/api/v1/logs/batch", body, nil, nil)
 	rr := httptest.NewRecorder()
@@ -1157,7 +1157,7 @@ func TestInvalidDateTimeError(t *testing.T) {
 	}
 
 	// Field prefix: a non-batch error names the offending field, then the
-	// sentinel text — and never an entry index.
+	// sentinel text, and never an entry index.
 	if got := (&InvalidDateTimeError{Field: "start_date", Index: -1}).Error(); !strings.HasPrefix(got, "start_date: ") {
 		t.Errorf("field error should start with the field name: %q", got)
 	}

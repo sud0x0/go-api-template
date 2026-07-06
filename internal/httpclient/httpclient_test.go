@@ -30,7 +30,7 @@ func TestClient_PropagatesRequestID(t *testing.T) {
 	_ = resp.Body.Close()
 
 	if seenRequestID != wantID {
-		t.Errorf("upstream did not see request ID — got %q, want %q", seenRequestID, wantID)
+		t.Errorf("upstream did not see request ID: got %q, want %q", seenRequestID, wantID)
 	}
 }
 

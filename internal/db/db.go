@@ -19,7 +19,7 @@ import (
 )
 
 // PgxIface is the minimal pgx interface needed by repositories. It is
-// satisfied by *pgxpool.Pool, pgx.Tx, and the pgxmock mock pool — so
+// satisfied by *pgxpool.Pool, pgx.Tx, and the pgxmock mock pool, so
 // repositories work both inside and outside transactions and are unit-testable
 // without a real database.
 type PgxIface interface {
@@ -29,13 +29,13 @@ type PgxIface interface {
 }
 
 // DB wraps a pgxpool.Pool and provides application-level helpers.
-// Obtain one via New() and pass it explicitly to repositories — no globals.
+// Obtain one via New() and pass it explicitly to repositories: no globals.
 type DB struct {
 	pool *pgxpool.Pool
 }
 
 // New opens and validates a Postgres connection pool using the provided configuration.
-// Returns an error for any misconfiguration rather than calling os.Exit —
+// Returns an error for any misconfiguration rather than calling os.Exit:
 // the caller (main) decides whether to exit and how to log the failure.
 //
 // tracer is wired into the pool's ConnConfig so every query the application
@@ -84,7 +84,7 @@ func New(cfg *config.DatabaseConfig, log logger.Logger, tracer pgx.QueryTracer, 
 
 	if err := verifySchema(ctx, pool, requiredTables); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("schema verification failed — run make db-migrate: %w", err)
+		return nil, fmt.Errorf("schema verification failed, run make db-migrate: %w", err)
 	}
 
 	log.LogInfo("database initialised", "host", cfg.Host, "dbname", cfg.Name)
@@ -94,11 +94,11 @@ func New(cfg *config.DatabaseConfig, log logger.Logger, tracer pgx.QueryTracer, 
 // toInt32 converts a pool-size config value with an explicit range check.
 // config.Load validates these at startup; this guard additionally protects
 // direct constructions of DatabaseConfig (tests, future workers/CLIs) that
-// do not pass through Load — the same defence-in-depth reasoning as
+// do not pass through Load, the same defence-in-depth reasoning as
 // repoMaxUserIDLength. The explicit bounds also make the conversion provably
 // safe to static analysers (CodeQL go/incorrect-integer-conversion, gosec G115).
 //
-// This guards ONLY the conversion — the representable [0, MaxInt32] range. The
+// This guards ONLY the conversion: the representable [0, MaxInt32] range. The
 // SEMANTIC rules (MaxOpenConns >= 1, MinConns <= MaxOpenConns) live in
 // config.validate() and must NOT be duplicated here: do not "complete" the
 // lower bound to 1 or add a relational check, or the two layers drift.

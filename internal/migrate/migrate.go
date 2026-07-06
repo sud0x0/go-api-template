@@ -44,7 +44,7 @@ func IsSupported(cmd string) bool {
 // IsDestructive reports whether the command can lose data. Up-only
 // commands (up, up-by-one, up-to) and read-only commands (status,
 // db-version) are NOT destructive even though up commands alter the
-// schema — a forward migration is recoverable; a backward one is not.
+// schema. A forward migration is recoverable; a backward one is not.
 func IsDestructive(cmd string) bool {
 	switch cmd {
 	case "down", "down-to", "redo", "reset":
@@ -55,7 +55,7 @@ func IsDestructive(cmd string) bool {
 
 // CheckDestructiveGate returns nil if the command is non-destructive OR
 // both gates are satisfied. Otherwise it returns a descriptive error
-// listing exactly which gates were missing — the migrator main loop
+// listing exactly which gates were missing; the migrator main loop
 // surfaces this and exits 2.
 //
 // Both gates are required deliberately: the env var alone would let a
@@ -78,7 +78,7 @@ func CheckDestructiveGate(cmd string, confirmFlag bool, envValue string) error {
 		return nil
 	}
 	return fmt.Errorf(
-		"destructive command %q refused — missing: %s",
+		"destructive command %q refused; missing: %s",
 		cmd, strings.Join(missing, " AND "),
 	)
 }
@@ -105,7 +105,7 @@ func BuildConnConfig(cfg *config.MigratorConfig) (*pgx.ConnConfig, error) {
 
 // OpenDB opens a *sql.DB for the migrator with timeouts wired through
 // pgx runtime parameters. Goose requires a *sql.DB; the migrator is the
-// ONLY part of this codebase that uses database/sql + pgx/v5/stdlib —
+// ONLY part of this codebase that uses database/sql + pgx/v5/stdlib;
 // the API uses native pgxpool.
 func OpenDB(cfg *config.MigratorConfig) (*sql.DB, error) {
 	connCfg, err := BuildConnConfig(cfg)

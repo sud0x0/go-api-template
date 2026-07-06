@@ -6,7 +6,7 @@
 // These tests verify:
 //  1. The embedded migrations apply cleanly against a real Postgres.
 //  2. goose_db_version and the expected application tables exist after up.
-//  3. The session locker actually serialises concurrent migrator runs —
+//  3. The session locker actually serialises concurrent migrator runs:
 //     two goroutines calling Up() at the same time must both return nil
 //     errors AND each migration is recorded exactly once.
 
@@ -138,7 +138,7 @@ func TestMigrator_UpAppliesSchema_Integration(t *testing.T) {
 		t.Fatalf("Up: %v", err)
 	}
 	if len(results) == 0 {
-		t.Fatal("Up returned no results — embedded migrations missing?")
+		t.Fatal("Up returned no results; embedded migrations missing?")
 	}
 
 	// goose_db_version must exist.
@@ -170,11 +170,11 @@ func TestMigrator_UpAppliesSchema_Integration(t *testing.T) {
 // version table, surfacing as an error in at least one goroutine.
 func TestMigrator_ConcurrentUpsSerialise_Integration(t *testing.T) {
 	// Two separate *sql.DB instances so each goroutine has its own
-	// connection pool — the lock has to do real work across sessions.
+	// connection pool, so the lock has to do real work across sessions.
 	dbA := openIntegrationDB(t)
 	dbB := openIntegrationDB(t)
 	resetSchema(t, dbA)
-	// Intentionally no cleanup that drops the schema — see the comment on
+	// Intentionally no cleanup that drops the schema; see the comment on
 	// TestMigrator_UpAppliesSchema_Integration. The test ends with
 	// migrations applied so userlog's integration tests find their tables.
 

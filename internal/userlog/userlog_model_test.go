@@ -13,7 +13,7 @@ import (
 // service's structured LimitExceededError response.
 //
 // If someone re-adds `rune_max=10000` (or any rune_max) to a `log` field, this
-// test fails — pairing with the final-verification grep that
+// test fails, pairing with the final-verification grep that
 // `internal/userlog/userlog_model.go` contains no "10000".
 func TestModelTagsDoNotHardcodeLengthLimit(t *testing.T) {
 	for _, tc := range []struct {
@@ -30,7 +30,7 @@ func TestModelTagsDoNotHardcodeLengthLimit(t *testing.T) {
 			}
 			tag := field.Tag.Get("validate")
 			if strings.Contains(tag, "rune_max") {
-				t.Errorf("%s.Log validate tag %q must not carry rune_max — the length "+
+				t.Errorf("%s.Log validate tag %q must not carry rune_max: the length "+
 					"limit is owned by the service layer (shared.LogMaxChars)", tc.name, tag)
 			}
 			if strings.Contains(tag, "10000") {

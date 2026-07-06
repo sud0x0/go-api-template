@@ -70,7 +70,7 @@ var knownOperations = map[string]struct{}{
 	"COMMIT":   {},
 	"ROLLBACK": {},
 	// WITH is the leading keyword of a CTE query (`WITH x AS (...) SELECT ...`);
-	// including it keeps CTEs out of the OTHER bucket. Still bounded — one fixed
+	// including it keeps CTEs out of the OTHER bucket. Still bounded: one fixed
 	// label, not derived from the CTE body.
 	"WITH": {},
 }
@@ -78,7 +78,7 @@ var knownOperations = map[string]struct{}{
 // extractOperation finds the first SQL keyword of a query, after skipping
 // leading whitespace and any combination of single-line (--) and block
 // (/* */) comments, uppercases it, and returns it if it matches the
-// bounded set — otherwise "OTHER".
+// bounded set, otherwise "OTHER".
 func extractOperation(sql string) string {
 	stripped := stripLeadingNoise(sql)
 	word := strings.ToUpper(firstWord(stripped))
@@ -102,7 +102,7 @@ func stripLeadingNoise(sql string) string {
 			if end := strings.Index(sql, "*/"); end >= 0 {
 				sql = sql[end+2:]
 			} else {
-				// Unterminated block comment — give up.
+				// Unterminated block comment: give up.
 				return ""
 			}
 		default:

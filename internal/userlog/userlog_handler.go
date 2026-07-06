@@ -25,7 +25,7 @@ import (
 // private CounterVec.
 //
 // The authenticated user ID is read from the request context via
-// shared.UserIDFromContext — auth middleware sets it with shared.WithUserID.
+// shared.UserIDFromContext. Auth middleware sets it with shared.WithUserID.
 // The key lives in internal/shared (not this feature package) so middleware,
 // which is infrastructure, never has to import a feature.
 type HandlerMetrics interface {
@@ -41,7 +41,7 @@ type Handler struct {
 }
 
 // NewLogHandler creates a new Handler. validate is initialised here so the
-// handler is self-contained and testable. metrics is required — pass a
+// handler is self-contained and testable. metrics is required: pass a
 // real *metrics.Metrics in production or a stub in tests.
 func NewLogHandler(service logService, log logLogger, m HandlerMetrics) *Handler {
 	v := validator.New()
@@ -66,7 +66,7 @@ func NewLogHandler(service logService, log logLogger, m HandlerMetrics) *Handler
 //
 // Keeping route registration next to the handlers means adding a feature wires
 // exactly one line in main.go (its Routes call), not five scattered r.Get/Post
-// lines — and the feature owns its own URL shape.
+// lines, and the feature owns its own URL shape.
 func (h *Handler) Routes(r chi.Router) {
 	r.Get("/logs", h.ListLogs)
 	r.Post("/logs", h.CreateLog)
@@ -118,7 +118,7 @@ func decodeJSONBody(r *http.Request, dst any) error {
 		return ErrInvalidReqBody
 	}
 
-	// A second decode must hit EOF — anything else means the client sent more
+	// A second decode must hit EOF. Anything else means the client sent more
 	// than one JSON value (e.g. two concatenated objects) or trailing garbage.
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return ErrInvalidReqBody
@@ -128,7 +128,7 @@ func decodeJSONBody(r *http.Request, dst any) error {
 
 // handleError maps package errors to HTTP responses and increments the
 // api_errors_total counter with a bounded error_type label. This is the
-// single place where errors are logged AND counted — lower layers wrap
+// single place where errors are logged AND counted. Lower layers wrap
 // and return.
 func (h *Handler) handleError(ctx context.Context, w http.ResponseWriter, err error) {
 	log := logger.FromContext(ctx, h.logger)
@@ -146,7 +146,7 @@ func (h *Handler) handleError(ctx context.Context, w http.ResponseWriter, err er
 	switch {
 	case errors.Is(err, ErrDatabase):
 		h.metrics.IncAPIError(FeatureName, ErrTypeDatabase)
-		// Log the underlying cause — multi-%w wrapping preserves it for diagnostics.
+		// Log the underlying cause. Multi-%w wrapping preserves it for diagnostics.
 		log.LogError(ErrDatabase, err)
 		shared.WriteJSONError(w, http.StatusInternalServerError, ErrTypeDatabase, "database error occurred")
 	case errors.Is(err, ErrUnauthorised):
@@ -238,18 +238,18 @@ func (h *Handler) GetLog(w http.ResponseWriter, r *http.Request) {
 // ListLogs handles GET /logs in two mutually-exclusive pagination modes:
 //
 //   - Offset mode (default, backwards-compatible): ?limit&offset → a BARE array
-//     [...]. Offset is capped at shared.MaxPageOffset — a hard reachability
+//     [...]. Offset is capped at shared.MaxPageOffset, a hard reachability
 //     limit; deeper data is only reachable via cursor mode.
 //   - Cursor (keyset) mode: ?cursor[=<token>] → a wrapped object
 //     {"logs":[...],"next_cursor":"..."}. The first page uses an empty cursor
 //     (?cursor=); each response carries the next_cursor to fetch the next page
 //     (omitted on the last page). Recommended for deep or concurrently-mutated
-//     lists — it does not walk-and-discard rows and pages don't shift under
+//     lists. It does not walk-and-discard rows and pages don't shift under
 //     inserts.
 //
 // Supplying both ?cursor and ?offset is a 400 (invalid_pagination). When
 // start_date or end_date are omitted the service defaults to 1970-01-01 and
-// 2099-12-31 respectively — always supply a date range in production.
+// 2099-12-31 respectively. Always supply a date range in production.
 func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID, ok := shared.UserIDFromContext(ctx)
@@ -287,7 +287,7 @@ func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Offset mode (default) — bare array, unchanged shape.
+	// Offset mode (default): bare array, unchanged shape.
 	offsetStr := shared.SanitiseNullBytes(q.Get("offset"))
 	limit, offset, err := shared.ValidatePagination(limitStr, offsetStr)
 	if err != nil {
@@ -336,8 +336,8 @@ func (h *Handler) CreateLog(w http.ResponseWriter, r *http.Request) {
 	h.responseJSON(ctx, w, entry, http.StatusCreated)
 }
 
-// BatchCreate handles POST /logs/batch. It creates every entry atomically — any
-// single failure rolls back the whole batch — and returns 201 with the created
+// BatchCreate handles POST /logs/batch. It creates every entry atomically (any
+// single failure rolls back the whole batch) and returns 201 with the created
 // entries in request order. The atomic transaction is owned by the service (see
 // createLogs); this handler only validates and dispatches.
 func (h *Handler) BatchCreate(w http.ResponseWriter, r *http.Request) {
@@ -369,7 +369,7 @@ func (h *Handler) BatchCreate(w http.ResponseWriter, r *http.Request) {
 		req.Logs[i].Log = shared.SanitiseNullBytes(req.Logs[i].Log)
 	}
 
-	// `min=1` rejects an empty/absent list (400) — `required` alone does NOT (a
+	// `min=1` rejects an empty/absent list (400); `required` alone does NOT (a
 	// non-nil empty slice from `"logs":[]` is not the zero value); see the
 	// BatchCreateRequest model comment. `dive` validates each entry's required
 	// fields exactly as a single create does. The rune limit and RFC3339 date
