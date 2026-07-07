@@ -243,7 +243,7 @@ This is **function-level** authorisation only. It answers "may this role call th
 
 The contract seam is unchanged: auth middleware stores the internal UUID via `shared.WithUserID(ctx, id)`, and handlers read it via `shared.UserIDFromContext(ctx)`. The key lives in `internal/shared` so infrastructure middleware never imports a feature package. To swap in your own auth, replace the middleware wired at the `r.Route("/api/v1", …)` block in `cmd/api/main.go`.
 
-> **Browser forks: do not store tokens in `localStorage`.** It is readable by any script on the page, so an XSS turns into token theft. Prefer a same-site, `HttpOnly` cookie set by a backend-for-frontend, or in-memory storage. See the [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage). This is a client concern. The resource server takes no position beyond this note.
+> **Browser forks: do not store tokens in `localStorage`.** It is readable by any script on the page, so an XSS turns into token theft. Prefer a same-site, `HttpOnly` cookie set by a backend-for-frontend, or in-memory storage. That backend-for-frontend is a separate backend that sits in front of this API and holds the tokens itself. It is not this API, so a frontend must not assume this service holds its tokens. See the [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage). This is a client concern. The resource server takes no position beyond this note.
 
 ### What is out of scope
 
