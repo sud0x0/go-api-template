@@ -46,6 +46,13 @@ const (
 	// metrics middleware.
 	ErrTypeUnauthorised = "unauthorised"
 	ErrTypeForbidden    = "forbidden"
+	// ErrTypeInvalidTarget is emitted by the OPA authorisation middleware when a
+	// caller supplies a malformed `?user=` target-user parameter (not a UUID). It
+	// is a 400: a client error in request INPUT, caught before the OPA input is
+	// built and before any query, exactly as parsePathUUID rejects a bad path id.
+	// Like the other router/middleware-level types it carries no feature label and
+	// is not recorded on api_errors_total.
+	ErrTypeInvalidTarget = "invalid_target"
 )
 
 // WriteJSONError writes the standard error envelope with the given status,

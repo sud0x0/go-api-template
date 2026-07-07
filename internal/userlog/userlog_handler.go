@@ -96,6 +96,27 @@ func parsePathUUID(raw string) (string, error) {
 	return id.String(), nil
 }
 
+// effectiveOwner returns the user whose rows this request acts on, and whether
+// the request is CROSS-USER (target != caller).
+//
+// It defaults to self-access (the caller's own UUID). It returns a DIFFERENT
+// owner ONLY when the OPA authorisation middleware validated a `?user=` target,
+// authorised the (caller, target, action) tuple, and stored the canonical target
+// on the request context (shared.WithTargetUser, set only after an explicit OPA
+// allow). The handler therefore reads the target from the CONTEXT the middleware
+// wrote, never from request input directly: a caller cannot reach another user's
+// data by supplying a target the policy did not approve. With OPA disabled the
+// context carries no target, so every request stays self-access and the
+// cross-user branch is unreachable — the fail-safe default. This is the
+// defensive seam a future refactor must not bypass (do not re-read the query
+// parameter here). See .claude/rules/decisions.md and security.md rule 4.
+func effectiveOwner(ctx context.Context, caller string) (owner string, crossUser bool) {
+	if target, ok := shared.TargetUserFromContext(ctx); ok && target != caller {
+		return target, true
+	}
+	return caller, false
+}
+
 // decodeJSONBody strictly decodes exactly one JSON object from r.Body into dst.
 //
 // It enforces three rules and maps each failure to a bounded sentinel:
@@ -226,7 +247,17 @@ func (h *Handler) GetLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := h.service.getLog(ctx, id, userID)
+	// Self-access by default; cross-user only when OPA already authorised a target
+	// (see effectiveOwner). Cross-user reads the target's row via the target-aware
+	// service method, still scoped to the target's user_id, so a row the target
+	// does not own is a 404, never a cross-owner leak.
+	owner, crossUser := effectiveOwner(ctx, userID)
+	var entry Log
+	if crossUser {
+		entry, err = h.service.getLogForTarget(ctx, id, owner)
+	} else {
+		entry, err = h.service.getLog(ctx, id, owner)
+	}
 	if err != nil {
 		h.handleError(ctx, w, err)
 		return
@@ -258,6 +289,15 @@ func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Self-access by default; cross-user only when OPA already authorised a target
+	// (see effectiveOwner). For a cross-user list the WHOLE collection and the
+	// cursor must belong to the TARGET: both the offset and keyset paths below pass
+	// `owner` (target, not caller) to the target-aware service methods, so a page
+	// never mixes callers' rows and next_cursor only ever repositions within the
+	// target's rows. This is the highest-exposure cross-user path, so the owner
+	// value is resolved once here and used uniformly by both modes.
+	owner, crossUser := effectiveOwner(ctx, userID)
+
 	q := r.URL.Query()
 	limitStr := shared.SanitiseNullBytes(q.Get("limit"))
 	startDate := shared.SanitiseNullBytes(q.Get("start_date"))
@@ -278,7 +318,15 @@ func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cursor := shared.SanitiseNullBytes(q.Get("cursor"))
-		logs, nextCursor, err := h.service.getLogsCursor(ctx, userID, startDate, endDate, cursor, limit)
+		var (
+			logs       []Log
+			nextCursor string
+		)
+		if crossUser {
+			logs, nextCursor, err = h.service.getLogsCursorForTarget(ctx, owner, startDate, endDate, cursor, limit)
+		} else {
+			logs, nextCursor, err = h.service.getLogsCursor(ctx, owner, startDate, endDate, cursor, limit)
+		}
 		if err != nil {
 			h.handleError(ctx, w, err)
 			return
@@ -295,7 +343,12 @@ func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logs, err := h.service.getLogs(ctx, userID, startDate, endDate, limit, offset)
+	var logs []Log
+	if crossUser {
+		logs, err = h.service.getLogsForTarget(ctx, owner, startDate, endDate, limit, offset)
+	} else {
+		logs, err = h.service.getLogs(ctx, owner, startDate, endDate, limit, offset)
+	}
 	if err != nil {
 		h.handleError(ctx, w, err)
 		return
@@ -327,6 +380,12 @@ func (h *Handler) CreateLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// CREATE has no cross-user path: a log is created under its CALLER's own id,
+	// never a `?user=` target. Creation is caller-owned by nature (you author your
+	// own records), so there is no "create a row on another user's behalf" verb
+	// here. Any target the OPA input carried for a POST is therefore ignored by
+	// design (Level 2 cross-user covers read/update/delete only). See
+	// decisions.md.
 	entry, err := h.service.createLog(ctx, userID, req)
 	if err != nil {
 		h.handleError(ctx, w, err)
@@ -379,6 +438,10 @@ func (h *Handler) BatchCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Like single create, BATCH create is caller-owned: every entry is inserted
+	// under the caller's own id, never a `?user=` target. There is no cross-user
+	// batch-create variant because creation authors the caller's own records; the
+	// cross-user model (Level 2) covers read/update/delete only. See decisions.md.
 	entries, err := h.service.createLogs(ctx, userID, req.Logs)
 	if err != nil {
 		h.handleError(ctx, w, err)
@@ -417,7 +480,16 @@ func (h *Handler) UpdateLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := h.service.updateLog(ctx, id, userID, req)
+	// Self-access by default; cross-user write only when OPA authorised the target
+	// (see effectiveOwner). The target-aware update stays scoped to the target's
+	// user_id, so writing a row the target does not own is a 404, not a leak.
+	owner, crossUser := effectiveOwner(ctx, userID)
+	var entry Log
+	if crossUser {
+		entry, err = h.service.updateLogForTarget(ctx, id, owner, req)
+	} else {
+		entry, err = h.service.updateLog(ctx, id, owner, req)
+	}
 	if err != nil {
 		h.handleError(ctx, w, err)
 		return
@@ -441,8 +513,18 @@ func (h *Handler) DeleteLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.deleteLog(ctx, id, userID); err != nil {
-		h.handleError(ctx, w, err)
+	// Self-access by default; cross-user delete only when OPA authorised the target
+	// (see effectiveOwner). Still scoped to the target's user_id, so deleting a row
+	// the target does not own is a 404.
+	owner, crossUser := effectiveOwner(ctx, userID)
+	var derr error
+	if crossUser {
+		derr = h.service.deleteLogForTarget(ctx, id, owner)
+	} else {
+		derr = h.service.deleteLog(ctx, id, owner)
+	}
+	if derr != nil {
+		h.handleError(ctx, w, derr)
 		return
 	}
 

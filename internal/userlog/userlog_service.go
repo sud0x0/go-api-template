@@ -10,6 +10,12 @@ import (
 )
 
 // logService defines the interface for log business logic.
+//
+// As in the repository, the plain methods are the SELF-ACCESS path and the
+// *ForTarget methods are the CROSS-USER path (caller acts on targetUserID's
+// rows, only after an OPA allow). They apply the identical business validation
+// and differ only in which owner the row-ownership query is scoped to. Creation
+// has no cross-user variant: a log is always created under its caller's own id.
 type logService interface {
 	getLog(ctx context.Context, id, userID string) (Log, error)
 	getLogs(ctx context.Context, userID, startDate, endDate string, limit, offset int) ([]Log, error)
@@ -18,6 +24,12 @@ type logService interface {
 	createLogs(ctx context.Context, userID string, reqs []CreateRequest) ([]Log, error)
 	updateLog(ctx context.Context, id, userID string, req UpdateRequest) (Log, error)
 	deleteLog(ctx context.Context, id, userID string) error
+
+	getLogForTarget(ctx context.Context, id, targetUserID string) (Log, error)
+	getLogsForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit, offset int) ([]Log, error)
+	getLogsCursorForTarget(ctx context.Context, targetUserID, startDate, endDate, cursor string, limit int) ([]Log, string, error)
+	updateLogForTarget(ctx context.Context, id, targetUserID string, req UpdateRequest) (Log, error)
+	deleteLogForTarget(ctx context.Context, id, targetUserID string) error
 }
 
 // txRunner is the transaction-control capability the service needs for
@@ -104,7 +116,29 @@ func (s *defaultLogService) getLogs(ctx context.Context, userID, startDate, endD
 // exists without a second round-trip: if the repo returns more than `limit`
 // rows, there is more, and the next_cursor is the keyset of the limit-th row.
 func (s *defaultLogService) getLogsCursor(ctx context.Context, userID, startDate, endDate, cursor string, limit int) ([]Log, string, error) {
-	if userID == "" {
+	return s.getLogsCursorScoped(ctx, userID, startDate, endDate, cursor, limit,
+		s.repo.getLogsKeysetFirst, s.repo.getLogsKeysetAfter)
+}
+
+// keysetFirstFn / keysetAfterFn are the two repository entry points a cursor
+// walk needs. They are threaded into getLogsCursorScoped so the SELF and
+// CROSS-USER cursor paths share ONE copy of the pagination logic (fetch+1,
+// next-cursor computation) and differ only in which owner-scoped repository
+// methods they call. This single-sourcing is the guarantee behind
+// decisions.md's "cursor stays within one owner": self and cross-user cannot
+// drift because they run the same code.
+type keysetFirstFn func(ctx context.Context, ownerID, startDate, endDate string, limit int) ([]Log, error)
+type keysetAfterFn func(ctx context.Context, ownerID, startDate, endDate string, cursorTime time.Time, cursorID string, limit int) ([]Log, error)
+
+// getLogsCursorScoped is the keyset (cursor) list path, parameterised by the
+// owner-scoped repository methods it walks. See getLogsCursor's original doc:
+// an empty cursor is the first page; a non-empty cursor is strictly decoded
+// (decodeCursor) before any SQL; it fetches limit+1 to detect a further page
+// without a second round-trip. The whole walk is scoped to a SINGLE ownerID
+// (caller for self-access, target for cross-user), so a page never mixes owners
+// and the next_cursor only ever repositions within that one owner's rows.
+func (s *defaultLogService) getLogsCursorScoped(ctx context.Context, ownerID, startDate, endDate, cursor string, limit int, first keysetFirstFn, after keysetAfterFn) ([]Log, string, error) {
+	if ownerID == "" {
 		return nil, "", ErrMissingParameters
 	}
 
@@ -117,13 +151,13 @@ func (s *defaultLogService) getLogsCursor(ctx context.Context, userID, startDate
 
 	var rows []Log
 	if cursor == "" {
-		rows, err = s.repo.getLogsKeysetFirst(ctx, userID, startDate, endDate, fetch)
+		rows, err = first(ctx, ownerID, startDate, endDate, fetch)
 	} else {
 		cursorTime, cursorID, derr := decodeCursor(cursor)
 		if derr != nil {
 			return nil, "", derr
 		}
-		rows, err = s.repo.getLogsKeysetAfter(ctx, userID, startDate, endDate, cursorTime, cursorID, fetch)
+		rows, err = after(ctx, ownerID, startDate, endDate, cursorTime, cursorID, fetch)
 	}
 	if err != nil {
 		return nil, "", err
@@ -227,4 +261,54 @@ func (s *defaultLogService) deleteLog(ctx context.Context, id, userID string) er
 		return ErrMissingParameters
 	}
 	return s.repo.deleteLog(ctx, id, userID)
+}
+
+// --- Cross-user (target-scoped) methods ---
+//
+// Each applies the SAME business validation as its self-access sibling and then
+// calls the repository's target-scoped method. They are only reached after the
+// OPA middleware authorised the caller to act on targetUserID; the service does
+// not re-check that. Row ownership is still enforced in SQL (the *ForTarget
+// repo methods scope by targetUserID), so a not-owned object is a clean
+// not-found, never a cross-owner leak.
+
+func (s *defaultLogService) getLogForTarget(ctx context.Context, id, targetUserID string) (Log, error) {
+	if id == "" || targetUserID == "" {
+		return Log{}, ErrMissingParameters
+	}
+	return s.repo.getLogForTarget(ctx, id, targetUserID)
+}
+
+func (s *defaultLogService) getLogsForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit, offset int) ([]Log, error) {
+	if targetUserID == "" {
+		return nil, ErrMissingParameters
+	}
+	startDate, endDate, err := normaliseDateRange(startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.getLogsForTarget(ctx, targetUserID, startDate, endDate, limit, offset)
+}
+
+func (s *defaultLogService) getLogsCursorForTarget(ctx context.Context, targetUserID, startDate, endDate, cursor string, limit int) ([]Log, string, error) {
+	return s.getLogsCursorScoped(ctx, targetUserID, startDate, endDate, cursor, limit,
+		s.repo.getLogsKeysetFirstForTarget, s.repo.getLogsKeysetAfterForTarget)
+}
+
+func (s *defaultLogService) updateLogForTarget(ctx context.Context, id, targetUserID string, req UpdateRequest) (Log, error) {
+	if id == "" || targetUserID == "" {
+		return Log{}, ErrMissingParameters
+	}
+	runeCount := shared.RuneCountLen(req.Log)
+	if runeCount > shared.LogMaxChars {
+		return Log{}, NewLogTooLongError(runeCount)
+	}
+	return s.repo.updateLogForTarget(ctx, id, targetUserID, req.Log)
+}
+
+func (s *defaultLogService) deleteLogForTarget(ctx context.Context, id, targetUserID string) error {
+	if id == "" || targetUserID == "" {
+		return ErrMissingParameters
+	}
+	return s.repo.deleteLogForTarget(ctx, id, targetUserID)
 }

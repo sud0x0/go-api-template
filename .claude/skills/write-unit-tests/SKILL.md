@@ -52,6 +52,15 @@ A package at 100% line coverage with none of these is under-tested. A package th
 ## Security behaviours get tests as a matter of course
 The template's security invariants are enforced *by tests*, and new security-relevant code must be too, as a matter of course, not on request. The canonical trio already present: **401 on a non-UUID subject**, **413 on an oversize body**, **400 on a malformed cursor**. When testing a change with a security surface, cross-reference [`/security-review`](../security-review/SKILL.md) and the [ASVS map](../security-review/references/asvs-map.md) for the requirements in scope, and add a test per relevant behaviour. (ASVS 5.0.0 itself lists automated testing as a use case for the standard.)
 
+**Cross-user / ABAC test shape (decisions.md #21).** When a change adds cross-user access, add the full set (models: `TestLogHandler_CrossUser`, `TestLogHandler_CrossUser_Integration`, `TestOPAAuth_CrossUserDeniedFailsClosed`):
+
+- **Privileged caller allowed on another user's object.** With the target set on the context (as the OPA middleware does after an allow), assert the handler reads/updates/deletes the TARGET's row. The mock expectation asserts `WithArgs(targetUserID, …)`, so a handler that leaked the caller's id fails `ExpectationsWereMet`.
+- **Plain caller gets 403 BEFORE the handler.** At the middleware layer, an OPA `false`/error/timeout on a cross-user tuple is a 403 in the `forbidden` envelope and never reaches `next` (fail-closed).
+- **Self-access unchanged.** With no target on the context the handler scopes to the caller (and `target == caller` is treated as self-access, not cross-user).
+- **Cross-user list returns ONLY the target's rows**, with the cursor bounded to the target (assert every returned row's owner is the target and `next_cursor` stays within them).
+- **Malformed target is a 400**, not a 500 (`uuid.Parse` at the middleware, `invalid_target` envelope), and OPA is not consulted.
+- **Policy-rule tripwire.** Flip the OPA `admin` rule to deny (or the `team-lead` boundary to always-true) in `policy.rego`, watch the corresponding `policy_test.rego`/Go cross-user test flip, then revert. Report it exactly as the invariant tripwire below.
+
 **Record the test in the ASVS map, in the same change.** When a test proves an ASVS requirement (newly, or by promoting a `met-untested` row), add its name to that row's **Test evidence** column in [`asvs-map.md`](../security-review/references/asvs-map.md) as part of the same change. The map's maintenance rule treats a `met` row with no named test as invalid (`met-untested`), so an untracked security test leaves the map lying about its own coverage.
 
 ## Verification

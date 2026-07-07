@@ -11,6 +11,12 @@ import (
 // with context keys set by other packages or third-party libraries.
 type userIDContextKey struct{}
 
+// targetUserContextKey is the unexported context-key type for the TARGET user
+// of a cross-user request: the user whose objects the caller is acting on when
+// that user is NOT the caller. A private struct type (like userIDContextKey)
+// avoids any cross-package collision.
+type targetUserContextKey struct{}
+
 // WithUserID returns a copy of ctx carrying the authenticated user ID.
 //
 // This is the auth contract's single seam: any auth middleware (which is
@@ -56,6 +62,49 @@ func WithUserID(ctx context.Context, userID string) context.Context {
 // ("", false); handlers map ok=false to a 401.
 func UserIDFromContext(ctx context.Context) (string, bool) {
 	raw, ok := ctx.Value(userIDContextKey{}).(string)
+	if !ok || raw == "" {
+		return "", false
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	return id.String(), true
+}
+
+// WithTargetUser returns a copy of ctx carrying the canonical TARGET-user UUID
+// for a cross-user request.
+//
+// It is the cross-user analogue of WithUserID and shares its discipline: it is a
+// PLAIN SETTER (the UUID shape is enforced at the single read point,
+// TargetUserFromContext). Only the OPA authorisation middleware sets it, and
+// ONLY after OPA has explicitly authorised the (caller, target, action) tuple.
+// Because the middleware runs before any feature handler and fails closed, a
+// value set here always corresponds to an access the policy already allowed: a
+// handler that reads it back can never reach a different user's rows on a path
+// OPA did not approve. Cross-user access ALWAYS stays scoped to this target's
+// user_id in the repository SQL (row-ownership, security.md rule 5); the target
+// is DATA authorised by OPA, never authority derived from request input.
+//
+// Template surface: exercised by identity_test.go and the OPA middleware. Like
+// WithUserID it has no in-repo production caller that `make deadcode` can see
+// from a binary main, so it is flagged unreachable there by design. Do not
+// delete.
+func WithTargetUser(ctx context.Context, targetUserID string) context.Context {
+	return context.WithValue(ctx, targetUserContextKey{}, targetUserID)
+}
+
+// TargetUserFromContext returns the canonical target-user UUID for a cross-user
+// request and whether one is present. It is the single enforcement point for
+// the target-user UUID contract, mirroring UserIDFromContext: uuid.Parse
+// canonicalises the value and rejects a non-UUID (returning ok=false) so a
+// malformed target can never reach a query as a cast-error 500.
+//
+// ok=false means "no cross-user target set" — the normal self-access case, in
+// which the handler acts on the caller's OWN rows. A handler must therefore
+// default to the caller's UUID when this returns false, never fail open.
+func TargetUserFromContext(ctx context.Context) (string, bool) {
+	raw, ok := ctx.Value(targetUserContextKey{}).(string)
 	if !ok || raw == "" {
 		return "", false
 	}

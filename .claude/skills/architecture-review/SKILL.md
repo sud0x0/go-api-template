@@ -36,6 +36,7 @@ The template is a layered, one-package-per-feature architecture: **handler → s
 - **Error contract is total.** Every `ErrType*` constant has a `handleError` case emitting the matching bounded label/status/envelope. **This is enforced by a contract test, run it as evidence:** `go test ./internal/<feature>/ -run 'ErrorType\|HandlerError\|Mappings'` (or the package's contract test), and `go test ./internal/contract/...`.
 - **Transactions live in the service.** Multi-statement atomic operations use `db.WithTransaction` with a tx-scoped `NewLogRepository(tx)`. Single-statement methods are NOT wrapped (decisions.md #12). `grep -rn 'WithTransaction' internal/<feature>/`.
 - **Logging placement.** Only the handler takes a logger. Service/repository don't.
+- **The two authorisation layers stay separate** (decisions.md #17, #21). OPA does FUNCTION/ATTRIBUTE-level authz (may this caller, with these attributes, act on this target owner); the repository SQL does OBJECT-level ownership (`WHERE … AND user_id = $N`). Confirm a change has NOT collapsed them: no row filtering pushed into OPA, and — critically — **no unscoped query that omits the `user_id` predicate** was introduced. Cross-user access must run a target-aware method still scoped to the target's `user_id` (`*ForTarget`), authorised by OPA per object, with the target derived from the context the middleware wrote after an allow, never re-read from request input in the handler. `grep -rn 'FROM <table>' internal/<feature>/` → every read/write carries a `user_id` predicate.
 
 ## Part 3: single source of truth
 

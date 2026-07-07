@@ -62,6 +62,13 @@ Then review each file by hand. Sed handles the bulk but leaves these edge cases:
 - **`<feature>_handler.go`**: keep the flow: UUID parse → struct validate → service call → `responseJSON`. Every error path through `handleError`. Every metric label from constants.
 - **`<feature>_test.go`**: update test data and assertions. Keep the `assertErrorRecorded` calls in every error-path subtest so the bounded-label discipline (rule 7) is enforced.
 
+**Cross-user access (only if your feature needs it).** If a feature must let a privileged caller act on ANOTHER user's rows, follow the `userlog` reference pattern exactly (`decisions.md` #21), do not invent a new mechanism:
+
+- The OPA middleware already authorises `{subject, roles, action, resource, method, target_user}` in the four fixed verbs (`read`/`create`/`update`/`delete`) and writes the authorised `target_user` to the context after an explicit allow. Do not add new action names.
+- Add a **target-aware repository method** (`getXForTarget`, `updateXForTarget`, …) that runs the SAME query scoped to the **target's** `user_id`. Never add an unscoped query that omits `user_id`: cross-user still enforces object ownership at the data layer.
+- The handler defaults to **self-access** (the caller's UUID) and goes cross-user ONLY via `effectiveOwner(ctx, caller)` (reads `shared.TargetUserFromContext`, set only after the OPA allow). With OPA disabled every request stays self-access, so the cross-user branch cannot be reached without the policy check.
+- Create stays caller-owned (no cross-user create). Add the `?user=` parameter to the OpenAPI spec for read/update/delete only, and a role-or-attribute rule to `policy.rego` + `policy_test.rego`. See `internal/userlog/` for the full worked example.
+
 ### 2. Write the migration
 
 Create `migrations/NNNNN_create_<features>.sql`. Use goose markers:

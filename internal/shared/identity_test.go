@@ -68,3 +68,32 @@ func TestUserIDFromContext_EmptyAndMissing(t *testing.T) {
 		}
 	})
 }
+
+// TestTargetUserFromContext mirrors the user-ID contract for the cross-user
+// target: it canonicalises a valid UUID, rejects a non-UUID (so a malformed
+// target can never reach a query), and reports ("", false) when absent (the
+// self-access default the handler must fall back to).
+func TestTargetUserFromContext(t *testing.T) {
+	const canonical = "990e8400-e29b-41d4-a716-446655440009"
+
+	t.Run("canonicalises a valid UUID", func(t *testing.T) {
+		ctx := WithTargetUser(context.Background(), "990E8400-E29B-41D4-A716-446655440009")
+		got, ok := TargetUserFromContext(ctx)
+		if !ok || got != canonical {
+			t.Errorf("got (%q, %v), want (%q, true)", got, ok, canonical)
+		}
+	})
+
+	t.Run("rejects a non-UUID target", func(t *testing.T) {
+		ctx := WithTargetUser(context.Background(), "not-a-uuid")
+		if got, ok := TargetUserFromContext(ctx); ok {
+			t.Errorf("non-UUID target should be rejected, got (%q, true)", got)
+		}
+	})
+
+	t.Run("absent target is self-access", func(t *testing.T) {
+		if got, ok := TargetUserFromContext(context.Background()); ok || got != "" {
+			t.Errorf("missing: got (%q, %v), want (\"\", false)", got, ok)
+		}
+	})
+}

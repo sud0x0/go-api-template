@@ -1,73 +1,169 @@
-# Tests for the starter authorisation policy. Run with `opa test deploy/opa/`.
-# Covers both allow and deny cases, including the default-deny fallthrough.
+# Tests for the starter ABAC authorisation policy. Run with `opa test deploy/opa/`.
+# Covers self-access, RBAC-style cross-user (admin), scoped cross-user
+# (team-lead within/outside boundary), unknown-role deny, missing-attribute deny,
+# and the default-deny fallthrough.
 
 package api.authz
 
 import rego.v1
 
-# --- allow cases ---
+# Fixed test identities.
+admin_id := "11111111-1111-1111-1111-111111111111"
 
-test_admin_allowed_any_action if {
+user_id := "22222222-2222-2222-2222-222222222222"
+
+lead_blue := "1a000000-0000-4000-8000-0000000000a1" # team-lead, team "blue"
+
+target_blue := "1b000000-0000-4000-8000-0000000000b1" # another "blue" member
+
+target_red := "1c000000-0000-4000-8000-0000000000c1" # "red" member
+
+# --- self-access ---
+
+test_self_access_read_allowed if {
 	allow with input as {
-		"subject": "11111111-1111-1111-1111-111111111111",
+		"subject": user_id,
+		"roles": ["user"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": user_id,
+	}
+}
+
+# Self-access holds even for a no-role token: the subject may act on its own data
+# (row ownership is still enforced in SQL beneath the policy).
+test_self_access_no_roles_allowed if {
+	allow with input as {
+		"subject": user_id,
+		"roles": [],
+		"action": "update",
+		"resource": "/api/v1/logs/{id}",
+		"method": "PUT",
+		"target_user": user_id,
+	}
+}
+
+# --- RBAC-style cross-user (admin) ---
+
+test_admin_cross_user_read_allowed if {
+	allow with input as {
+		"subject": admin_id,
+		"roles": ["admin"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": target_red,
+	}
+}
+
+test_admin_cross_user_delete_allowed if {
+	allow with input as {
+		"subject": admin_id,
 		"roles": ["admin"],
 		"action": "delete",
 		"resource": "/api/v1/logs/{id}",
 		"method": "DELETE",
+		"target_user": target_blue,
 	}
 }
 
-test_user_allowed_read_logs if {
+test_admin_cross_user_update_allowed if {
 	allow with input as {
-		"subject": "22222222-2222-2222-2222-222222222222",
-		"roles": ["user"],
+		"subject": admin_id,
+		"roles": ["admin"],
+		"action": "update",
+		"resource": "/api/v1/logs/{id}",
+		"method": "PUT",
+		"target_user": user_id,
+	}
+}
+
+# --- scoped cross-user (team-lead) ---
+
+# A team-lead acting on a target in the SAME team is allowed.
+test_team_lead_within_boundary_allowed if {
+	allow with input as {
+		"subject": lead_blue,
+		"roles": ["team-lead"],
 		"action": "read",
-		"resource": "/api/v1/logs",
+		"resource": "/api/v1/logs/{id}",
 		"method": "GET",
+		"target_user": target_blue,
 	}
 }
 
-test_user_allowed_create_logs if {
-	allow with input as {
-		"subject": "22222222-2222-2222-2222-222222222222",
-		"roles": ["user"],
-		"action": "create",
-		"resource": "/api/v1/logs",
-		"method": "POST",
+# A team-lead acting on a target in a DIFFERENT team is denied.
+test_team_lead_outside_boundary_denied if {
+	not allow with input as {
+		"subject": lead_blue,
+		"roles": ["team-lead"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": target_red,
+	}
+}
+
+# A team-lead whose target has no known team (missing boundary attribute) is
+# denied — the scoped rule fails closed, it never defaults to allow.
+test_team_lead_missing_target_team_denied if {
+	not allow with input as {
+		"subject": lead_blue,
+		"roles": ["team-lead"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": "99999999-9999-4999-8999-999999999999",
 	}
 }
 
 # --- deny cases ---
 
-# A plain user may not delete (only admins may).
-test_user_denied_delete if {
+# An unknown role grants NO cross-user access (target != subject → default deny).
+test_unknown_role_cross_user_denied if {
 	not allow with input as {
-		"subject": "22222222-2222-2222-2222-222222222222",
+		"subject": user_id,
+		"roles": ["viewer"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": target_blue,
+	}
+}
+
+# A plain user may not act cross-user (only admin/team-lead can).
+test_user_cross_user_denied if {
+	not allow with input as {
+		"subject": user_id,
 		"roles": ["user"],
 		"action": "delete",
 		"resource": "/api/v1/logs/{id}",
 		"method": "DELETE",
+		"target_user": target_blue,
 	}
 }
 
-# No roles at all falls through to default deny.
-test_no_roles_denied if {
+# Missing subject (unauthenticated) is denied even for self-shaped input.
+test_missing_subject_denied if {
 	not allow with input as {
-		"subject": "33333333-3333-3333-3333-333333333333",
+		"subject": "",
 		"roles": [],
 		"action": "read",
 		"resource": "/api/v1/logs",
 		"method": "GET",
+		"target_user": "",
 	}
 }
 
-# A user is scoped to the logs resource; an unrelated resource is denied.
-test_user_denied_unknown_resource if {
+# A recognised role on an unrelated resource is still denied.
+test_unknown_resource_denied if {
 	not allow with input as {
-		"subject": "22222222-2222-2222-2222-222222222222",
-		"roles": ["user"],
+		"subject": admin_id,
+		"roles": ["admin"],
 		"action": "read",
 		"resource": "/api/v1/secrets",
 		"method": "GET",
+		"target_user": admin_id,
 	}
 }

@@ -11,11 +11,21 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/sud0x0/go-api-template/internal/config"
 	"github.com/sud0x0/go-api-template/internal/shared"
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
 )
+
+// targetUserParam is the query parameter naming the TARGET owner of a
+// cross-user request (e.g. GET /api/v1/logs/{id}?user=<uuid>). It is the ONLY
+// route by which a caller names another user, and it is DATA, not authority:
+// the caller may act on it only if OPA authorises the (caller, target, action)
+// tuple. Absent (or equal to the caller) it means ordinary self-access. It is
+// deliberately a query parameter, not a request-body field, so the middleware
+// derives the target without parsing bodies on the hot path.
+const targetUserParam = "user"
 
 // errUndefinedDecision is returned when OPA responds 200 but with no "result"
 // key: an undefined decision (no matching rule and no default). It is a DENY.
@@ -53,15 +63,26 @@ type opaRequest struct {
 
 // opaInput is the decision input. Every field is BOUNDED: subject is an
 // internal UUID, roles are internal role names, action is a fixed verb, resource
-// is the chi ROUTE PATTERN (never the raw path), and method is the HTTP method.
+// is the chi ROUTE PATTERN (never the raw path), method is the HTTP method, and
+// target_user is a canonical UUID (validated before this struct is built).
 // Using the route pattern (e.g. /api/v1/logs/{id}) keeps the policy input a
 // small fixed set, matching the metrics cardinality rule.
+//
+// ABAC note: this template's authorisation is attribute-based (see
+// .claude/rules/decisions.md). The caller's ATTRIBUTES are its Subject and
+// Roles (a role is just one attribute, so a role-only policy rule is RBAC
+// expressed in ABAC); TargetUser is the object attribute that lets the policy
+// decide cross-user access. Both self-access (TargetUser == Subject) and
+// cross-user access (TargetUser != Subject) are decided here, by the policy,
+// never by request input alone: TargetUser is DATA the policy reasons about, not
+// authority the caller asserts.
 type opaInput struct {
-	Subject  string   `json:"subject"`
-	Roles    []string `json:"roles"`
-	Action   string   `json:"action"`
-	Resource string   `json:"resource"`
-	Method   string   `json:"method"`
+	Subject    string   `json:"subject"`
+	Roles      []string `json:"roles"`
+	Action     string   `json:"action"`
+	Resource   string   `json:"resource"`
+	Method     string   `json:"method"`
+	TargetUser string   `json:"target_user"`
 }
 
 // opaResponse is the OPA REST Data API response. Result is a POINTER so a body
@@ -108,12 +129,25 @@ func NewOPAAuthorizer(cfg config.OPAConfig, log logger.Logger) *OPAAuthorizer {
 func (a *OPAAuthorizer) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		subject, _ := shared.UserIDFromContext(r.Context())
+
+		// Derive and VALIDATE the target user BEFORE building the OPA input and
+		// before any query. A malformed target is the caller's own bad input, so
+		// it is a 400 (like parsePathUUID for a bad path id), never a Postgres
+		// cast-error 500 and never an OPA round-trip on garbage.
+		target, err := targetUser(r, subject)
+		if err != nil {
+			shared.WriteJSONError(w, http.StatusBadRequest, shared.ErrTypeInvalidTarget,
+				"invalid target user: must be a UUID")
+			return
+		}
+
 		input := opaInput{
-			Subject:  subject,
-			Roles:    rolesFromContext(r.Context()),
-			Action:   methodToAction(r.Method),
-			Resource: routePattern(r),
-			Method:   r.Method,
+			Subject:    subject,
+			Roles:      rolesFromContext(r.Context()),
+			Action:     methodToAction(r.Method),
+			Resource:   routePattern(r),
+			Method:     r.Method,
+			TargetUser: target,
 		}
 
 		allowed, err := a.decide(r.Context(), input)
@@ -129,8 +163,36 @@ func (a *OPAAuthorizer) Handler(next http.Handler) http.Handler {
 			shared.WriteJSONError(w, http.StatusForbidden, shared.ErrTypeForbidden, "forbidden")
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		// Only reached on an EXPLICIT allow. Carry the authorised target forward so
+		// the feature handler acts on exactly the owner OPA approved. A handler
+		// reads it via shared.TargetUserFromContext and, when it differs from the
+		// caller, uses the target-aware repository method (still scoped by the
+		// target's user_id). Because this is set only here, after the allow, a
+		// cross-user data path exists ONLY where the policy authorised it: with OPA
+		// disabled nothing sets it and every request stays self-access.
+		ctx := shared.WithTargetUser(r.Context(), target)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// targetUser derives the canonical target-owner UUID for the request. The
+// `?user=<uuid>` query parameter names the target owner (see targetUserParam);
+// absent or blank, the target defaults to the caller's own subject (self-access).
+// A present value must parse as a UUID: it is canonicalised via uuid.Parse (which
+// also bounds its length, rejecting oversized junk) so a non-UUID is a 400 at the
+// caller, never SQL. The value is request INPUT and is treated as DATA only: the
+// caller's right to act on it is decided by OPA, not asserted by supplying it.
+func targetUser(r *http.Request, subject string) (string, error) {
+	raw := shared.SanitiseNullBytes(strings.TrimSpace(r.URL.Query().Get(targetUserParam)))
+	if raw == "" {
+		return subject, nil
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	return id.String(), nil
 }
 
 // decide POSTs the input to OPA and returns the boolean decision. It returns a

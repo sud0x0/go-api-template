@@ -183,6 +183,7 @@ paths:
             verbatim. Mutually exclusive with `offset` (supplying both → 400).
           schema:
             type: string
+        - $ref: "#/components/parameters/TargetUser"
       responses:
         "200":
           description: |
@@ -291,6 +292,7 @@ paths:
       operationId: getLog
       parameters:
         - $ref: "#/components/parameters/LogID"
+        - $ref: "#/components/parameters/TargetUser"
       responses:
         "200":
           description: Log entry
@@ -322,6 +324,7 @@ paths:
       operationId: updateLog
       parameters:
         - $ref: "#/components/parameters/LogID"
+        - $ref: "#/components/parameters/TargetUser"
       requestBody:
         required: true
         content:
@@ -357,6 +360,7 @@ paths:
       operationId: deleteLog
       parameters:
         - $ref: "#/components/parameters/LogID"
+        - $ref: "#/components/parameters/TargetUser"
       responses:
         "204":
           description: Log entry deleted
@@ -401,6 +405,25 @@ components:
         type: string
         format: uuid
         example: "660e8400-e29b-41d4-a716-446655440001"
+    TargetUser:
+      name: user
+      in: query
+      required: false
+      description: |
+        CROSS-USER access (attribute-based, evaluated by OPA). Names the TARGET
+        owner whose objects the request acts on. Omitted (the normal case) means
+        self-access: the request acts on the caller's own rows. When present and
+        different from the caller, the request is cross-user and is allowed ONLY
+        if the OPA policy authorises the (caller, target, action) tuple against
+        the caller's token attributes; otherwise it is 403 BEFORE the handler
+        runs. The value is DATA (which owner), not authority: supplying it does
+        not grant access. A malformed value (not a UUID) returns 400
+        (`invalid_target`). Applies to read/update/delete only — create is always
+        caller-owned and ignores it. See the README "Authorisation model".
+      schema:
+        type: string
+        format: uuid
+        example: "990e8400-e29b-41d4-a716-446655440009"
 
   schemas:
     Log:

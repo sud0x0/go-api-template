@@ -514,6 +514,114 @@ func driveHandler(t *testing.T, h func(http.ResponseWriter, *http.Request), meth
 	return rr
 }
 
+// driveHandlerCrossUser runs a handler as a CROSS-USER request: the caller is
+// `caller`, and `target` is stamped on the context exactly as the OPA
+// authorisation middleware does after an allow (shared.WithTargetUser). The
+// handler must then act on the target's rows, not the caller's.
+func driveHandlerCrossUser(t *testing.T, h func(http.ResponseWriter, *http.Request), method, id, caller, target string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, "/api/v1/logs/"+id, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := shared.WithUserID(req.Context(), caller)
+	ctx = shared.WithTargetUser(ctx, target)
+	chiCtx := chi.NewRouteContext()
+	chiCtx.URLParams.Add("id", id)
+	ctx = context.WithValue(ctx, chi.RouteCtxKey, chiCtx)
+	req = req.WithContext(ctx)
+	rr := httptest.NewRecorder()
+	h(rr, req)
+	return rr
+}
+
+// TestLogHandler_CrossUser_Integration proves the AUTHORISED cross-user path
+// against real Postgres: once OPA has allowed the (caller, target, action) tuple
+// (simulated here by setting the target on the context), a privileged caller can
+// read, update, AND delete ANOTHER user's log. Self-access is unchanged, and the
+// cross-user list returns only the target's rows.
+//
+// The COMPLEMENTARY control — a plain (unauthorised) caller is stopped with a 403
+// BEFORE the handler runs — lives in the OPA middleware and is proven by
+// TestOPAAuth_CrossUserDeniedFailsClosed (fail-closed, no DB). The two layers are
+// deliberately separate: OPA does function/attribute-level authorisation, the SQL
+// here does object-level ownership (still scoped to the target's user_id).
+func TestLogHandler_CrossUser_Integration(t *testing.T) {
+	database := setupIntegrationDB(t)
+	repo := NewLogRepository(database.Pool())
+	svc := NewLogService(repo, database)
+	handler := NewLogHandler(svc, &integrationLogger{}, &noopHandlerMetrics{})
+
+	const (
+		owner  = "a1000000-0000-4000-8000-00000000000a" // target: owns the rows
+		caller = "b1000000-0000-4000-8000-00000000000b" // admin-attributed caller
+	)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = database.Pool().Exec(ctx,
+			"DELETE FROM logs WHERE user_id = ANY($1)", []string{owner, caller})
+	})
+
+	ownerRow, err := repo.createLog(ctx, owner, "2025-04-01T10:00:00Z", "owner's private row")
+	if err != nil {
+		t.Fatalf("seed owner: %v", err)
+	}
+
+	// Cross-user READ: caller reads the owner's row (200, the owner's content).
+	rr := driveHandlerCrossUser(t, handler.GetLog, http.MethodGet, ownerRow.ID, caller, owner, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("cross-user GET: got %d want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	var read Log
+	if err := json.Unmarshal(rr.Body.Bytes(), &read); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if read.UserID != owner {
+		t.Errorf("cross-user GET returned owner %q, want the target %q", read.UserID, owner)
+	}
+
+	// Cross-user UPDATE: caller edits the owner's row (200, persisted under owner).
+	updateBody, _ := json.Marshal(UpdateRequest{Log: "edited cross-user"})
+	rr = driveHandlerCrossUser(t, handler.UpdateLog, http.MethodPut, ownerRow.ID, caller, owner, updateBody)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("cross-user PUT: got %d want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+	persisted, err := repo.getLog(ctx, ownerRow.ID, owner)
+	if err != nil {
+		t.Fatalf("re-read owner row: %v", err)
+	}
+	if persisted.Log != "edited cross-user" {
+		t.Errorf("cross-user update did not persist: got %q", persisted.Log)
+	}
+
+	// Cross-user LIST (offset) returns only the target owner's rows.
+	list, err := svc.getLogsForTarget(ctx, owner, "1970-01-01T00:00:00Z", "2099-12-31T23:59:59Z", 100, 0)
+	if err != nil {
+		t.Fatalf("cross-user list: %v", err)
+	}
+	if len(list) != 1 || list[0].UserID != owner {
+		t.Errorf("cross-user list must contain only the owner's rows, got %+v", list)
+	}
+
+	// Cross-user DELETE: caller deletes the owner's row (204, row gone).
+	rr = driveHandlerCrossUser(t, handler.DeleteLog, http.MethodDelete, ownerRow.ID, caller, owner, nil)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("cross-user DELETE: got %d want 204 (body: %s)", rr.Code, rr.Body.String())
+	}
+	if n := countLogsForUser(t, database, owner); n != 0 {
+		t.Errorf("owner should have 0 rows after cross-user delete, got %d", n)
+	}
+
+	// Self-access is unchanged: caller acting on its OWN (absent) row is a clean
+	// 404, never a leak, and never touches the owner's data.
+	callerRow, err := repo.createLog(ctx, caller, "2025-04-02T10:00:00Z", "caller's own row")
+	if err != nil {
+		t.Fatalf("seed caller: %v", err)
+	}
+	rr = driveHandler(t, handler.GetLog, http.MethodGet, callerRow.ID, caller, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("self-access GET of own row: got %d want 200 (body: %s)", rr.Code, rr.Body.String())
+	}
+}
+
 // TestLogRepository_CrossUserIsolation_Integration proves object-level
 // authorization: user B can never reach user A's row by id or by listing.
 // This is OWASP API Top 10 API1:2023 Broken Object Level Authorization (BOLA)

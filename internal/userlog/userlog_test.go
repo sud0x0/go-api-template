@@ -162,9 +162,242 @@ func mockLogRows(mock pgxmock.PgxPoolIface) *pgxmock.Rows {
 	})
 }
 
+// testTargetUserID is a SECOND user, distinct from testUserID (the caller). It
+// stands in for the owner of a cross-user request.
+const testTargetUserID = "990e8400-e29b-41d4-a716-446655440009"
+
+// withCrossUserTarget stamps the canonical target owner on a request's context
+// exactly as the OPA authorisation middleware does AFTER an allow. Handlers read
+// it back via shared.TargetUserFromContext and take the cross-user (target-aware)
+// path. Setting it directly here mirrors "OPA already authorised this tuple".
+func withCrossUserTarget(req *http.Request, target string) *http.Request {
+	return req.WithContext(shared.WithTargetUser(req.Context(), target))
+}
+
 // ============================================================================
 // TESTS
 // ============================================================================
+
+// TestLogHandler_CrossUser proves the cross-user path: when the OPA middleware
+// has authorised a target (set on the context), the handler scopes reads and
+// writes to the TARGET's user_id, never the caller's. Every mock expectation
+// asserts WithArgs(testTargetUserID, …): if the handler passed the caller
+// (testUserID) instead, ExpectationsWereMet would fail. This is the unit-level
+// counterpart to the integration cross-user test.
+func TestLogHandler_CrossUser(t *testing.T) {
+	testDateTime := "2025-12-28T10:30:00Z"
+	now := time.Now()
+	parsedTime, _ := time.Parse(time.RFC3339, testDateTime)
+
+	t.Run("GET scopes to the target owner", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectQuery(`SELECT .+ FROM logs WHERE id = \$1 AND user_id = \$2`).
+			WithArgs(testLogID, testTargetUserID). // target, not caller
+			WillReturnRows(mockLogRows(mock).AddRow(
+				testLogID, testTargetUserID, parsedTime, "target's row", now, now,
+			))
+
+		req := createRequest(http.MethodGet, "/api/v1/logs/"+testLogID, nil,
+			map[string]string{"id": testLogID}, nil)
+		req = withCrossUserTarget(req, testTargetUserID)
+		rr := httptest.NewRecorder()
+		handler.GetLog(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		var resp Log
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if resp.UserID != testTargetUserID {
+			t.Errorf("returned row owner: got %q, want the target %q", resp.UserID, testTargetUserID)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled (caller leaked instead of target?): %s", err)
+		}
+	})
+
+	t.Run("UPDATE scopes to the target owner", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectQuery(`UPDATE logs SET log = \$1 WHERE id = \$2 AND user_id = \$3 RETURNING .+`).
+			WithArgs("edited by admin", testLogID, testTargetUserID).
+			WillReturnRows(mockLogRows(mock).AddRow(
+				testLogID, testTargetUserID, parsedTime, "edited by admin", now, now,
+			))
+
+		body, _ := json.Marshal(UpdateRequest{Log: "edited by admin"})
+		req := createRequest(http.MethodPut, "/api/v1/logs/"+testLogID, body,
+			map[string]string{"id": testLogID}, nil)
+		req = withCrossUserTarget(req, testTargetUserID)
+		rr := httptest.NewRecorder()
+		handler.UpdateLog(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %s", err)
+		}
+	})
+
+	t.Run("DELETE scopes to the target owner", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectExec(`DELETE FROM logs WHERE id = \$1 AND user_id = \$2`).
+			WithArgs(testLogID, testTargetUserID).
+			WillReturnResult(pgxmock.NewResult("DELETE", 1))
+
+		req := createRequest(http.MethodDelete, "/api/v1/logs/"+testLogID, nil,
+			map[string]string{"id": testLogID}, nil)
+		req = withCrossUserTarget(req, testTargetUserID)
+		rr := httptest.NewRecorder()
+		handler.DeleteLog(rr, req)
+
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("got %d want 204. Body: %s", rr.Code, rr.Body.String())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %s", err)
+		}
+	})
+
+	// The highest-exposure path: a cross-user OFFSET list must return ONLY the
+	// target's rows (the query is scoped to the target's user_id).
+	t.Run("offset LIST returns only the target's rows", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectQuery(`SELECT .+ FROM logs WHERE user_id = \$1 AND date_and_time >= \$2 AND date_and_time <= \$3 ORDER BY date_and_time DESC, id DESC LIMIT \$4 OFFSET \$5`).
+			WithArgs(testTargetUserID, "2025-12-01T00:00:00Z", "2025-12-31T23:59:59Z", shared.DefaultPageSize, 0).
+			WillReturnRows(mockLogRows(mock).
+				AddRow(testLogID, testTargetUserID, parsedTime, "t1", now, now).
+				AddRow("880e8400-e29b-41d4-a716-446655440003", testTargetUserID, parsedTime, "t2", now, now))
+
+		req := createRequest(http.MethodGet, "/api/v1/logs", nil, nil, map[string]string{
+			"start_date": "2025-12-01T00:00:00Z",
+			"end_date":   "2025-12-31T23:59:59Z",
+		})
+		req = withCrossUserTarget(req, testTargetUserID)
+		rr := httptest.NewRecorder()
+		handler.ListLogs(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		var resp []Log
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(resp) != 2 {
+			t.Fatalf("got %d rows want 2", len(resp))
+		}
+		for _, l := range resp {
+			if l.UserID != testTargetUserID {
+				t.Errorf("cross-user list leaked a non-target row: owner %q", l.UserID)
+			}
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled (caller rows leaked?): %s", err)
+		}
+	})
+
+	// A cross-user CURSOR walk stays scoped to the target: the keyset query is
+	// scoped to the target's user_id and next_cursor only repositions within the
+	// target's rows.
+	t.Run("cursor LIST stays within the target's rows", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		// limit defaults to DefaultPageSize; the service fetches limit+1 to detect a
+		// further page. Two rows (< limit) → last page → no next_cursor.
+		mock.ExpectQuery(`SELECT .+ FROM logs WHERE user_id = \$1 AND date_and_time >= \$2 AND date_and_time <= \$3 ORDER BY date_and_time DESC, id DESC LIMIT \$4`).
+			WithArgs(testTargetUserID, "1970-01-01T00:00:00Z", "2099-12-31T23:59:59Z", shared.DefaultPageSize+1).
+			WillReturnRows(mockLogRows(mock).
+				AddRow(testLogID, testTargetUserID, parsedTime, "t1", now, now).
+				AddRow("880e8400-e29b-41d4-a716-446655440003", testTargetUserID, parsedTime, "t2", now, now))
+
+		req := createRequest(http.MethodGet, "/api/v1/logs", nil, nil, map[string]string{"cursor": ""})
+		req = withCrossUserTarget(req, testTargetUserID)
+		rr := httptest.NewRecorder()
+		handler.ListLogs(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		var page CursorPage
+		if err := json.Unmarshal(rr.Body.Bytes(), &page); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		for _, l := range page.Logs {
+			if l.UserID != testTargetUserID {
+				t.Errorf("cross-user cursor leaked a non-target row: owner %q", l.UserID)
+			}
+		}
+		if page.NextCursor != "" {
+			t.Errorf("last page must omit next_cursor, got %q", page.NextCursor)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %s", err)
+		}
+	})
+
+	// Self-access is unchanged: with no target on the context the handler scopes
+	// to the CALLER, calling the owner method (not a *ForTarget method).
+	t.Run("self-access still scopes to the caller", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectQuery(`SELECT .+ FROM logs WHERE id = \$1 AND user_id = \$2`).
+			WithArgs(testLogID, testUserID). // caller, no target set
+			WillReturnRows(mockLogRows(mock).AddRow(
+				testLogID, testUserID, parsedTime, "own row", now, now,
+			))
+
+		req := createRequest(http.MethodGet, "/api/v1/logs/"+testLogID, nil,
+			map[string]string{"id": testLogID}, nil)
+		rr := httptest.NewRecorder()
+		handler.GetLog(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %s", err)
+		}
+	})
+
+	// A target EQUAL to the caller is self-access, not cross-user: it must scope to
+	// the caller (the effectiveOwner crossUser flag is false when target == caller).
+	t.Run("target equal to caller is self-access", func(t *testing.T) {
+		handler, mock, _, cleanup := setupTestStack(t)
+		defer cleanup()
+
+		mock.ExpectQuery(`SELECT .+ FROM logs WHERE id = \$1 AND user_id = \$2`).
+			WithArgs(testLogID, testUserID).
+			WillReturnRows(mockLogRows(mock).AddRow(
+				testLogID, testUserID, parsedTime, "own row", now, now,
+			))
+
+		req := createRequest(http.MethodGet, "/api/v1/logs/"+testLogID, nil,
+			map[string]string{"id": testLogID}, nil)
+		req = withCrossUserTarget(req, testUserID) // target == caller
+		rr := httptest.NewRecorder()
+		handler.GetLog(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("got %d want 200. Body: %s", rr.Code, rr.Body.String())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("unfulfilled: %s", err)
+		}
+	})
+}
 
 func TestLogHandler(t *testing.T) {
 	testDateTime := "2025-12-28T10:30:00Z"

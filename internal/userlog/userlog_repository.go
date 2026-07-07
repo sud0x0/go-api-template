@@ -64,6 +64,17 @@ const (
 )
 
 // logRepository defines the interface for log data access.
+//
+// Two families of read/write methods coexist. The plain owner-scoped methods
+// (getLog, getLogs, updateLog, …) are the SELF-ACCESS path: the caller acts on
+// its own rows. The *ForTarget variants are the CROSS-USER path: the caller acts
+// on ANOTHER user's rows, and are only ever called after the OPA authorisation
+// middleware allowed the (caller, target, action) tuple. Both families run the
+// SAME SQL scoped by `WHERE … AND user_id = $N`; the ONLY difference is whether
+// $N is the caller or the target. There is deliberately NO unscoped query that
+// omits user_id: cross-user still enforces object ownership at the data layer
+// (security.md rule 5), so a forged/misauthorised request can at most reach the
+// TARGET's rows, never the whole table. See .claude/rules/decisions.md.
 type logRepository interface {
 	getLog(ctx context.Context, id, userID string) (Log, error)
 	getLogs(ctx context.Context, userID, startDate, endDate string, limit, offset int) ([]Log, error)
@@ -72,6 +83,16 @@ type logRepository interface {
 	createLog(ctx context.Context, userID, dateAndTime, logContent string) (Log, error)
 	updateLog(ctx context.Context, id, userID, logContent string) (Log, error)
 	deleteLog(ctx context.Context, id, userID string) error
+
+	// Cross-user variants: identical queries scoped to targetUserID instead of the
+	// caller. Reached only after an OPA allow. No create variant: creation is
+	// always caller-owned (see the service/handler notes).
+	getLogForTarget(ctx context.Context, id, targetUserID string) (Log, error)
+	getLogsForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit, offset int) ([]Log, error)
+	getLogsKeysetFirstForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit int) ([]Log, error)
+	getLogsKeysetAfterForTarget(ctx context.Context, targetUserID, startDate, endDate string, cursorTime time.Time, cursorID string, limit int) ([]Log, error)
+	updateLogForTarget(ctx context.Context, id, targetUserID, logContent string) (Log, error)
+	deleteLogForTarget(ctx context.Context, id, targetUserID string) error
 }
 
 // pgxLogRepository implements logRepository using native pgx.
@@ -237,4 +258,41 @@ func (r *pgxLogRepository) deleteLog(ctx context.Context, id, userID string) err
 		return ErrLogNotFound
 	}
 	return nil
+}
+
+// --- Cross-user (target-scoped) methods ---
+//
+// Each runs the SAME query as its owner-scoped sibling, but scopes user_id to
+// the TARGET rather than the caller. They are thin by design: the whole point of
+// cross-user access is "the identical row-ownership query, against a different
+// owner OPA authorised", so they delegate to the owner method with targetUserID
+// as the scope. This keeps ONE copy of every SQL string and guarantees the
+// cross-user path can never accidentally become an unscoped whole-table query —
+// it is still `WHERE … AND user_id = $N`, just with N = target. Callers reach
+// these only after the OPA middleware allowed the (caller, target, action)
+// tuple; the repository does not (and cannot) re-check that, so never call a
+// *ForTarget method on a path that has not passed OPA.
+
+func (r *pgxLogRepository) getLogForTarget(ctx context.Context, id, targetUserID string) (Log, error) {
+	return r.getLog(ctx, id, targetUserID)
+}
+
+func (r *pgxLogRepository) getLogsForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit, offset int) ([]Log, error) {
+	return r.getLogs(ctx, targetUserID, startDate, endDate, limit, offset)
+}
+
+func (r *pgxLogRepository) getLogsKeysetFirstForTarget(ctx context.Context, targetUserID, startDate, endDate string, limit int) ([]Log, error) {
+	return r.getLogsKeysetFirst(ctx, targetUserID, startDate, endDate, limit)
+}
+
+func (r *pgxLogRepository) getLogsKeysetAfterForTarget(ctx context.Context, targetUserID, startDate, endDate string, cursorTime time.Time, cursorID string, limit int) ([]Log, error) {
+	return r.getLogsKeysetAfter(ctx, targetUserID, startDate, endDate, cursorTime, cursorID, limit)
+}
+
+func (r *pgxLogRepository) updateLogForTarget(ctx context.Context, id, targetUserID, logContent string) (Log, error) {
+	return r.updateLog(ctx, id, targetUserID, logContent)
+}
+
+func (r *pgxLogRepository) deleteLogForTarget(ctx context.Context, id, targetUserID string) error {
+	return r.deleteLog(ctx, id, targetUserID)
 }

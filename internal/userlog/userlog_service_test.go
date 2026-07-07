@@ -75,6 +75,95 @@ func (s *stubRepo) deleteLog(ctx context.Context, id, userID string) error {
 	return errors.New("deleteFn not set")
 }
 
+// Cross-user (*ForTarget) stubs mirror the real repository: each delegates to
+// its owner-scoped sibling with targetUserID as the scope, so a test can set a
+// single fn and exercise both the self and cross-user service paths. lastCallLog
+// records the *ForTarget name so a test can assert the cross-user path was taken.
+func (s *stubRepo) getLogForTarget(ctx context.Context, id, targetUserID string) (Log, error) {
+	l, err := s.getLog(ctx, id, targetUserID)
+	s.lastCallLog = "getLogForTarget"
+	return l, err
+}
+func (s *stubRepo) getLogsForTarget(ctx context.Context, targetUserID, sd, ed string, l, o int) ([]Log, error) {
+	rows, err := s.getLogs(ctx, targetUserID, sd, ed, l, o)
+	s.lastCallLog = "getLogsForTarget"
+	return rows, err
+}
+func (s *stubRepo) getLogsKeysetFirstForTarget(ctx context.Context, targetUserID, sd, ed string, limit int) ([]Log, error) {
+	rows, err := s.getLogsKeysetFirst(ctx, targetUserID, sd, ed, limit)
+	s.lastCallLog = "getLogsKeysetFirstForTarget"
+	return rows, err
+}
+func (s *stubRepo) getLogsKeysetAfterForTarget(ctx context.Context, targetUserID, sd, ed string, ct time.Time, cid string, limit int) ([]Log, error) {
+	rows, err := s.getLogsKeysetAfter(ctx, targetUserID, sd, ed, ct, cid, limit)
+	s.lastCallLog = "getLogsKeysetAfterForTarget"
+	return rows, err
+}
+func (s *stubRepo) updateLogForTarget(ctx context.Context, id, targetUserID, content string) (Log, error) {
+	l, err := s.updateLog(ctx, id, targetUserID, content)
+	s.lastCallLog = "updateLogForTarget"
+	return l, err
+}
+func (s *stubRepo) deleteLogForTarget(ctx context.Context, id, targetUserID string) error {
+	err := s.deleteLog(ctx, id, targetUserID)
+	s.lastCallLog = "deleteLogForTarget"
+	return err
+}
+
+// ---- cross-user (target-scoped) service methods -----------------------------
+
+func TestService_getLogForTarget_ScopesToTarget(t *testing.T) {
+	stub := &stubRepo{
+		getLogFn: func(_ context.Context, id, uid string) (Log, error) {
+			if uid != "target-uuid" {
+				t.Errorf("repo scope: got user %q, want the TARGET %q", uid, "target-uuid")
+			}
+			return Log{ID: id}, nil
+		},
+	}
+	svc := NewLogService(stub, nil)
+	if _, err := svc.getLogForTarget(context.Background(), "i", "target-uuid"); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if stub.lastCallLog != "getLogForTarget" {
+		t.Errorf("cross-user path not taken: lastCall=%q", stub.lastCallLog)
+	}
+}
+
+func TestService_updateLogForTarget_RejectsOverLength(t *testing.T) {
+	stub := &stubRepo{}
+	svc := NewLogService(stub, nil)
+	overlong := strings.Repeat("a", shared.LogMaxChars+1)
+	_, err := svc.updateLogForTarget(context.Background(), "i", "target-uuid", UpdateRequest{Log: overlong})
+	var limitErr *shared.LimitExceededError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("got %v, want LimitExceededError", err)
+	}
+	if stub.lastCallLog == "updateLogForTarget" {
+		t.Error("repo.updateLogForTarget should NOT be called for over-length input")
+	}
+}
+
+func TestService_getLogsCursorForTarget_ScopesWalkToTarget(t *testing.T) {
+	var seenOwner string
+	stub := &stubRepo{
+		keysetFirstFn: func(_ context.Context, uid, _, _ string, _ int) ([]Log, error) {
+			seenOwner = uid
+			return []Log{}, nil
+		},
+	}
+	svc := NewLogService(stub, nil)
+	if _, _, err := svc.getLogsCursorForTarget(context.Background(), "target-uuid", "", "", "", 10); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if seenOwner != "target-uuid" {
+		t.Errorf("cursor walk owner: got %q, want the TARGET %q", seenOwner, "target-uuid")
+	}
+	if stub.lastCallLog != "getLogsKeysetFirstForTarget" {
+		t.Errorf("cross-user cursor path not taken: lastCall=%q", stub.lastCallLog)
+	}
+}
+
 // ---- getLog -----------------------------------------------------------------
 
 func TestService_getLog_RejectsEmptyParams(t *testing.T) {
