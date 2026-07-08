@@ -116,6 +116,46 @@ func setRequiredDBEnv(t *testing.T) {
 	t.Setenv("DB_NAME", "d")
 }
 
+// TestLoad_RejectsNonPositiveDurations verifies every server timeout and DB
+// pool-duration variable is rejected at startup when set to zero or a negative
+// value (which would silently disable the protection), with the offending
+// variable named in the error. The defaults are all positive, so a base config
+// with only the required DB vars set must still load cleanly (the control case).
+func TestLoad_RejectsNonPositiveDurations(t *testing.T) {
+	vars := []string{
+		"SERVER_READ_HEADER_TIMEOUT_SECS",
+		"SERVER_READ_TIMEOUT_SECS",
+		"SERVER_WRITE_TIMEOUT_SECS",
+		"SERVER_IDLE_TIMEOUT_SECS",
+		"SERVER_REQUEST_TIMEOUT_SECS",
+		"DB_CONN_MAX_LIFETIME_MINS",
+		"DB_CONN_MAX_IDLE_TIME_MINS",
+	}
+	for _, name := range vars {
+		for _, bad := range []string{"0", "-1"} {
+			t.Run(name+"="+bad, func(t *testing.T) {
+				setRequiredDBEnv(t)
+				t.Setenv(name, bad)
+				_, err := Load()
+				if err == nil {
+					t.Fatalf("expected Load() to reject %s=%s, got nil", name, bad)
+				}
+				if !strings.Contains(err.Error(), name) {
+					t.Errorf("error should name the offending variable %q, got: %v", name, err)
+				}
+			})
+		}
+	}
+
+	// Control: the defaults (all positive) load cleanly.
+	t.Run("defaults load cleanly", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		if _, err := Load(); err != nil {
+			t.Fatalf("base config with default durations must load, got: %v", err)
+		}
+	})
+}
+
 // TestLoad_TrustProxyHeaders covers the opt-in proxy-trust flag: disabled by
 // default, parsed when set, rejected at startup when malformed.
 func TestLoad_TrustProxyHeaders(t *testing.T) {

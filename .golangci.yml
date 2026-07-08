@@ -26,9 +26,6 @@ linters:
     - godot
 
   settings:
-    gosec:
-      excludes:
-        - G404 # Weak random — acceptable for non-security use
     revive:
       rules:
         - name: exported

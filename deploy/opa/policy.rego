@@ -68,9 +68,14 @@ allow if {
 # An admin may act on ANY target user for the log actions. This is RBAC: it
 # checks only a role attribute. It is the whole basis for cross-user read AND
 # write/delete by a privileged caller.
+#
+# The subject != "" guard is symmetric with the self-access rule: an
+# unauthenticated request (empty subject) must never be allowed even if a roles
+# claim leaks through, so every allow path fails closed on a missing subject.
 allow if {
 	is_logs
 	input.action in log_actions
+	input.subject != ""
 	"admin" in input.roles
 }
 
@@ -85,6 +90,7 @@ allow if {
 allow if {
 	is_logs
 	input.action in log_actions
+	input.subject != ""
 	"team-lead" in input.roles
 	user_team[input.subject] == user_team[input.target_user]
 }

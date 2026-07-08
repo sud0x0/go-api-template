@@ -25,6 +25,13 @@ import (
 // RealIP MUST run before this middleware so r.RemoteAddr is the
 // resolved client IP, not the upstream proxy. See cmd/api/main.go.
 //
+// PRIVACY: the bound `ip` field is a client IP address, which is PERSONAL DATA
+// under GDPR/CCPA. It is logged here because it is essential for incident
+// response and abuse investigation, but a fork with strict data-retention or
+// minimisation rules should truncate it (e.g. drop the last octet / interface
+// id) or omit it entirely, and set a short retention on the log store. Change
+// the RemoteIP field passed below to adjust.
+//
 // It also reads the active OTel span from the request context and binds
 // trace_id/span_id onto the logger, so every log line in the request correlates
 // to its trace. The span is created by otelhttp, which wraps outside chi, so it

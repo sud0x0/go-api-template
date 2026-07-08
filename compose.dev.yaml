@@ -9,7 +9,10 @@
 
 services:
   db:
-    image: postgres:16-alpine
+    # Pinned to the MULTI-ARCH manifest-list digest (amd64 + arm64), not a
+    # per-arch digest, so this dev stack still comes up on both. Tag mutable,
+    # digest immutable. To bump: re-resolve the tag's manifest-list digest.
+    image: postgres@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb # postgres:16-alpine
     container_name: app_db
     environment:
       POSTGRES_DB: ${DB_NAME}
@@ -71,7 +74,9 @@ services:
   # deploy/otel-collector-config.yaml. Runs as a SEPARATE process (never inside
   # the app image), mirroring the sidecar/agent/gateway deployment model.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.155.0
+    # MULTI-ARCH manifest-list digest (amd64 + arm64). Tag mutable, digest
+    # immutable. To bump: re-resolve the tag's manifest-list digest.
+    image: otel/opentelemetry-collector-contrib@sha256:4935caa35e9a4cb387e35732e8fb22b2b5759af8d12e7043357f03837f6e8df5 # otel/opentelemetry-collector-contrib:0.155.0
     container_name: app_otel_collector
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
@@ -102,7 +107,9 @@ services:
   # with no roles and the default-deny policy returns 403, so to exercise the two
   # layers uncomment BOTH the OIDC_* variables and OPA_URL in .env.
   opa:
-    image: openpolicyagent/opa:1.9.0-static
+    # MULTI-ARCH manifest-list digest (amd64 + arm64). Tag mutable, digest
+    # immutable. To bump: re-resolve the tag's manifest-list digest.
+    image: openpolicyagent/opa@sha256:60b6af32b58377718546ac7d4634eecbfe50ec36f7d3ca3f8ebf515f9826c2ac # openpolicyagent/opa:1.9.0-static
     container_name: app_opa
     command:
       - "run"

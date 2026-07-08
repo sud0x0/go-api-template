@@ -108,6 +108,41 @@ func TestWithTransaction_BeginFailureSurfaces(t *testing.T) {
 	}
 }
 
+// TestWithTransaction_RollsBackOnPanic verifies the deferred-rollback leak
+// guard: a panic inside fn triggers Rollback (so the pooled connection is not
+// leaked with an open transaction) AND still propagates to the caller (so
+// chi.Recoverer produces the 500). Without the deferred rollback the panic would
+// unwind past both Commit and Rollback, leaking the connection.
+func TestWithTransaction_RollsBackOnPanic(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer mock.Close()
+
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("panic must propagate past WithTransaction, but it was swallowed")
+		}
+		if got, ok := r.(string); !ok || got != "boom in fn" {
+			t.Errorf("propagated panic value: got %v, want \"boom in fn\"", r)
+		}
+		// Begin AND Rollback must both have fired (the connection was released).
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("expectations: %v", err)
+		}
+	}()
+
+	_ = withTransactionOnIface(context.Background(), mock, func(_ pgx.Tx) error {
+		panic("boom in fn")
+	})
+	t.Fatal("unreachable: the panic should have unwound before this line")
+}
+
 // withTransactionOnIface mirrors DB.WithTransaction but takes the begin source
 // as a pgxmock interface so tests do not need a real *pgxpool.Pool. The shape
 // is identical to the production method (same commit/rollback semantics)
@@ -122,10 +157,11 @@ func withTransactionOnIface(ctx context.Context, p pgxmock.PgxPoolIface, fn func
 	if err != nil {
 		return err
 	}
+	// Mirror production's deferred-rollback leak guard exactly (see
+	// DB.WithTransaction): on the happy path Commit runs first and this is a
+	// no-op; on error or panic it closes the transaction.
+	defer func() { _ = tx.Rollback(ctx) }()
 	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return errors.Join(err, rbErr)
-		}
 		return err
 	}
 	return tx.Commit(ctx)

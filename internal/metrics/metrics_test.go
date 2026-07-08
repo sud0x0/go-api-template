@@ -156,6 +156,56 @@ func TestMiddleware_RecordsWrittenStatusOnPanic(t *testing.T) {
 	}
 }
 
+// TestMiddleware_NormalisesMethodAttribute verifies the http.request.method
+// attribute is bounded to the known-method allow-list: a known method is
+// recorded verbatim, an arbitrary token collapses to the "_OTHER" sentinel, and
+// the in-flight up-down counter nets to zero either way (so the normalised value
+// is used symmetrically on the +1 and -1).
+func TestMiddleware_NormalisesMethodAttribute(t *testing.T) {
+	cases := []struct {
+		name   string
+		method string
+		want   string
+	}{
+		{name: "known method recorded verbatim", method: http.MethodGet, want: http.MethodGet},
+		{name: "arbitrary token collapses to _OTHER", method: "WEIRDVERB123", want: methodOther},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m, reader := newForTest(t)
+
+			r := chi.NewRouter()
+			r.Use(m.Middleware)
+			// Handle matches ALL methods, so even a non-standard token reaches a 200.
+			r.Handle("/x", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(c.method, "/x", nil)
+			r.ServeHTTP(rr, req)
+
+			rm := collect(t, reader)
+			if v := sumInt64(t, rm, metricRequestCount,
+				attribute.String(attrHTTPMethod, c.want)); v != 1 {
+				t.Errorf("http.request.method=%q: got count %d, want 1", c.want, v)
+			}
+			// The raw token must NEVER appear as an attribute value when it is not a
+			// known method (the cardinality-DoS guard).
+			if c.method != c.want {
+				if v := sumInt64(t, rm, metricRequestCount,
+					attribute.String(attrHTTPMethod, c.method)); v != 0 {
+					t.Errorf("raw method %q leaked as an attribute value (count %d)", c.method, v)
+				}
+			}
+			// In-flight up-down counter must net back to 0 for the normalised value.
+			if v := sumInt64(t, rm, metricRequestsInFlight); v != 0 {
+				t.Errorf("in-flight counter not restored, got %d", v)
+			}
+		})
+	}
+}
+
 // TestIncAPIError verifies the handler-facing counter records under bounded
 // feature/error_type attributes.
 func TestIncAPIError(t *testing.T) {

@@ -132,7 +132,7 @@ All env vars are read once at startup by [`internal/config`](internal/config/con
 | `SERVER_IDLE_TIMEOUT_SECS`        | `120`        |                                                                                                   |
 | `SERVER_REQUEST_TIMEOUT_SECS`     | `60`         | Per-request handler timeout (chi Timeout)                                                         |
 | `LOG_LEVEL`                       | `production` | `development` / `production` / `quiet` / `silent` (default is fail-safe `production`)             |
-| `DB_SSLMODE`                      | `require`    |                                                                                                   |
+| `DB_SSLMODE`                      | `require`    | `require` encrypts but does **not** verify the server. Use `verify-full` + a CA across untrusted networks (see [Database](#database)) |
 | `DB_MAX_OPEN_CONNS`               | `100`        | pgxpool MaxConns                                                                                  |
 | `DB_MIN_CONNS`                    | `10`         | pgxpool MinConns (eagerly maintained)                                                             |
 | `DB_CONN_MAX_LIFETIME_MINS`       | `5`          |                                                                                                   |
@@ -272,6 +272,12 @@ The login redirect, authorization-code exchange, PKCE, `state`/`nonce`, redirect
 [`internal/db`](internal/db/db.go) wraps `*pgxpool.Pool`. Repositories accept `db.PgxIface`, a three-method interface (`Exec`, `Query`, `QueryRow`) satisfied by both `*pgxpool.Pool` and `pgx.Tx`. The same repository code therefore runs inside and outside transactions, and is unit-testable with [pgxmock](https://github.com/pashagolub/pgxmock).
 
 Native pgx auto-prepares and caches statements per connection, with no manual `Prepare`/`Close` bookkeeping anywhere.
+
+### Connection security (`DB_SSLMODE`)
+
+The default `DB_SSLMODE=require` **encrypts** the database link but does **not authenticate the server**: it performs no CA or hostname verification, so it does not stop a man-in-the-middle that presents its own certificate. It is a sensible default for a link that never leaves a trusted network (for example a private VPC or the local compose stack, which uses `disable`).
+
+For any deployment where the database link crosses an untrusted network, set `DB_SSLMODE=verify-full` and provide a CA certificate (via `PGSSLROOTCERT`/the standard libpq environment) so the driver verifies both the certificate chain and the hostname. `verify-full` is the only mode that defends against an active MITM. The config default stays `require` so local development works without certificate material; harden it in production.
 
 ### Transactions
 

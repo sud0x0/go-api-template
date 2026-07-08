@@ -26,7 +26,13 @@
 # ============================================================================
 # Stage 1 — build
 # ============================================================================
-FROM golang:1.26-alpine AS builder
+# golang:1.26-alpine, pinned to its MULTI-ARCH manifest-list digest (resolved via
+# the registry Docker-Content-Digest header, not a per-arch digest, so the build
+# still works on amd64 AND arm64). The tag is mutable; the digest is immutable, so
+# a rebuild can never silently pull a different base than the one CI validated.
+# To bump: re-resolve the tag's manifest-list digest and update both the digest
+# and the tag comment together.
+FROM golang@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648 AS builder
 
 # Version metadata is injected at build time. Without --build-arg, these
 # fall back to "dev"/"unknown" so --version still works on local builds.
@@ -63,7 +69,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 #   - /etc/passwd (for running as a non-root user)
 #   - timezone data
 # It has no shell, which means no shell injection surface.
-FROM gcr.io/distroless/static-debian12
+#
+# gcr.io/distroless/static-debian12, pinned to its MULTI-ARCH manifest-list digest
+# (the :latest tag is mutable; the digest is immutable and identical on amd64 +
+# arm64). To bump: re-resolve the tag's manifest-list digest and update the tag
+# comment with it.
+FROM gcr.io/distroless/static-debian12@sha256:9c346e4be81b5ca7ff31a0d89eaeade58b0f95cfd3baed1f36083ddb47ca3160
 
 # Run as non-root user (uid 65532 = "nonroot" in distroless)
 USER nonroot:nonroot

@@ -69,11 +69,19 @@ type ServerConfig struct {
 
 // DatabaseConfig holds database connection configuration.
 type DatabaseConfig struct {
-	Host            string
-	Port            string
-	User            string
-	Password        string
-	Name            string
+	Host     string
+	Port     string
+	User     string
+	Password string
+	Name     string
+	// SSLMode is the libpq sslmode for the connection (DB_SSLMODE, default
+	// "require"). SECURITY: "require" ENCRYPTS the link but does NOT authenticate
+	// the server: it performs no CA or hostname verification, so it does not stop
+	// a man-in-the-middle presenting its own certificate. For any deployment where
+	// the DB link crosses an untrusted network, use "verify-full" with a CA cert
+	// (DB_SSLMODE=verify-full plus the CA in the connection environment). The
+	// default stays "require" so local/compose dev works without cert material;
+	// harden it in production. See the README "Database" section.
 	SSLMode         string
 	MaxOpenConns    int
 	MinConns        int
@@ -425,6 +433,31 @@ func Load() (*Config, error) {
 // validate checks the non-database configuration values. LoadDatabase
 // already validated the Database section before Load embedded it.
 func (c *Config) validate() error {
+	// Positive-duration guard. A zero or negative timeout silently DISABLES the
+	// protection it configures: Go's http.Server treats a zero Read/Write/Idle
+	// timeout as "no timeout" (a slow-loris DoS surface), and a non-positive pool
+	// lifetime/idle removes the bound that recycles stale connections. Fail fast
+	// naming the offending variable rather than boot with the guard off (repo
+	// convention: no silent fallback). This mirrors the OPA-timeout guard below;
+	// RATE_LIMIT_RPM keeps its own >= 0 check because 0 there legitimately means
+	// "limiter disabled", whereas a 0 timeout is never a valid configuration.
+	for _, d := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"SERVER_READ_HEADER_TIMEOUT_SECS", c.Server.ReadHeaderTimeout},
+		{"SERVER_READ_TIMEOUT_SECS", c.Server.ReadTimeout},
+		{"SERVER_WRITE_TIMEOUT_SECS", c.Server.WriteTimeout},
+		{"SERVER_IDLE_TIMEOUT_SECS", c.Server.IdleTimeout},
+		{"SERVER_REQUEST_TIMEOUT_SECS", c.Server.RequestTimeout},
+		{"DB_CONN_MAX_LIFETIME_MINS", c.Database.ConnMaxLifetime},
+		{"DB_CONN_MAX_IDLE_TIME_MINS", c.Database.ConnMaxIdleTime},
+	} {
+		if d.value <= 0 {
+			return fmt.Errorf("%s must be a positive duration, got %v", d.name, d.value)
+		}
+	}
+
 	// A WriteTimeout shorter than RequestTimeout causes slow responses to be
 	// truncated mid-write before the handler timeout fires, usually surfacing
 	// as confusing "connection reset" reports. Fail at startup rather than ship.

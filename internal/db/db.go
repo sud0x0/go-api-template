@@ -136,16 +136,23 @@ func (d *DB) HealthCheck(ctx context.Context) error {
 
 // WithTransaction executes fn inside a database transaction.
 // Rolls back automatically if fn returns an error; commits otherwise.
+//
+// The deferred Rollback is the leak guard: without it, a PANIC inside fn would
+// unwind past both the Commit and the error-path Rollback, returning the pooled
+// connection to the pool still holding an open transaction (a connection leak
+// under repeated panics). The idiomatic pgx pattern is to defer Rollback right
+// after a successful Begin: on the happy path Commit runs first and the deferred
+// Rollback is then a harmless no-op (pgx returns ErrTxClosed, which we ignore);
+// on any error or panic the deferred Rollback closes the transaction. The panic
+// still propagates past this defer to chi.Recoverer - we do not recover it here.
 func (d *DB) WithTransaction(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := fn(tx); err != nil {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			return fmt.Errorf("tx error: %w, rollback error: %v", err, rbErr)
-		}
 		return err
 	}
 

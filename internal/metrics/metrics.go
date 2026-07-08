@@ -187,9 +187,12 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		start := time.Now()
-		// active_requests is keyed by method (semconv). The matching -1 in the
-		// deferred block uses the same method, so the up-down counter nets out.
-		methodAttr := metric.WithAttributes(attribute.String(attrHTTPMethod, r.Method))
+		// active_requests is keyed by method (semconv). Normalise once against the
+		// bounded allow-list so an arbitrary method token cannot explode the series;
+		// the matching -1 in the deferred block reuses this SAME value, so the
+		// up-down counter still nets out.
+		method := normalizeMethod(r.Method)
+		methodAttr := metric.WithAttributes(attribute.String(attrHTTPMethod, method))
 		m.requestsInFlight.Add(ctx, 1, methodAttr)
 		wrapped := chimw.NewWrapResponseWriter(w, r.ProtoMajor)
 
@@ -211,7 +214,7 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 			// body completed.
 
 			attrs := metric.WithAttributes(
-				attribute.String(attrHTTPMethod, r.Method),
+				attribute.String(attrHTTPMethod, method),
 				attribute.String(attrHTTPRoute, routeLabel(r)),
 				attribute.Int(attrHTTPStatus, statusCode),
 			)
@@ -227,6 +230,39 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(wrapped, r)
 	})
+}
+
+// methodOther is the OTel semconv sentinel recorded for any HTTP method token
+// outside the known set. net/http accepts arbitrary method tokens on the request
+// line, so recording r.Method verbatim would let a client mint unbounded
+// http.request.method time-series (a cardinality DoS) - the exact thing the
+// package doc promises does not happen. See semconv http.request.method.
+const methodOther = "_OTHER"
+
+// knownMethods is the fixed allow-list of HTTP methods recorded verbatim; any
+// other token normalises to methodOther. It is the RFC 9110 method set plus
+// PATCH (RFC 5789), which is also OTel semconv's http.request.method known set.
+var knownMethods = map[string]struct{}{
+	http.MethodGet:     {},
+	http.MethodHead:    {},
+	http.MethodPost:    {},
+	http.MethodPut:     {},
+	http.MethodPatch:   {},
+	http.MethodDelete:  {},
+	http.MethodConnect: {},
+	http.MethodOptions: {},
+	http.MethodTrace:   {},
+}
+
+// normalizeMethod bounds the http.request.method attribute: a known method is
+// returned as-is, anything else becomes methodOther. It is called ONCE per
+// request so the in-flight +1/-1 pair and the terminal attrs record the
+// identical value and the up-down counter still nets to zero.
+func normalizeMethod(method string) string {
+	if _, ok := knownMethods[method]; ok {
+		return method
+	}
+	return methodOther
 }
 
 // routeLabel returns chi's matched route pattern for matched requests, and the

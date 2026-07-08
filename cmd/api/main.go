@@ -168,6 +168,12 @@ func main() {
 	// Build the public API router (:PORT).
 	publicRouter := chi.NewRouter()
 
+	// SanitizeRequestID MUST precede chimw.RequestID: chi adopts an inbound
+	// X-Request-Id verbatim, and that value is trusted for log correlation and
+	// propagated on outbound calls (internal/httpclient). The wrapper strips a
+	// hostile/oversized inbound header so chi mints a fresh trusted ID, while
+	// preserving a well-formed one for genuine cross-service correlation.
+	publicRouter.Use(middleware.SanitizeRequestID)
 	publicRouter.Use(chimw.RequestID)
 	// RealIP resolves X-Forwarded-For / X-Real-IP onto r.RemoteAddr. When
 	// registered it must run BEFORE RequestLogger so the logged "ip" field is

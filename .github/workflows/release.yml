@@ -27,6 +27,12 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+          # Always grab the latest patch for the version line in go.mod, matching
+          # every setup-go step in ci.yml. Without this, setup-go installs the
+          # exact patch declared, so release binaries could ship a stdlib CVE that
+          # CI already validated as fixed in a later patch (govulncheck green in
+          # CI, vulnerable binary released).
+          check-latest: true
           cache: true
 
       - name: Install syft (SBOM generator)

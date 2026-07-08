@@ -156,6 +156,32 @@ test_missing_subject_denied if {
 	}
 }
 
+# An admin role with an EMPTY subject is denied: the admin rule fails closed on a
+# missing subject, symmetric with the self-access rule, so a leaked roles claim on
+# an unauthenticated request can never grant cross-user access.
+test_admin_empty_subject_denied if {
+	not allow with input as {
+		"subject": "",
+		"roles": ["admin"],
+		"action": "delete",
+		"resource": "/api/v1/logs/{id}",
+		"method": "DELETE",
+		"target_user": target_blue,
+	}
+}
+
+# Likewise a team-lead role with an empty subject is denied.
+test_team_lead_empty_subject_denied if {
+	not allow with input as {
+		"subject": "",
+		"roles": ["team-lead"],
+		"action": "read",
+		"resource": "/api/v1/logs/{id}",
+		"method": "GET",
+		"target_user": target_blue,
+	}
+}
+
 # A recognised role on an unrelated resource is still denied.
 test_unknown_resource_denied if {
 	not allow with input as {
