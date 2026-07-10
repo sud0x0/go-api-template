@@ -201,26 +201,44 @@ func TestOIDCAuth_RejectsWith401(t *testing.T) {
 	}
 }
 
-// An id token (token_use=="id") must not be accepted for authorization (V9.2.2),
-// even though it is otherwise a valid, correctly-signed, correctly-audienced token.
+// An ID token must not be accepted for authorization (V9.2.2), even when it is
+// otherwise valid, correctly-signed, and — critically for fix #2 — carries an
+// `aud` that EQUALS the configured audience. token_use=="id" (Cognito) is one
+// signal; the OIDC-Core ID-token-ONLY claims nonce/at_hash/c_hash are a positive
+// signal that works across IdPs that emit no token_use. Every case here keeps
+// aud == testAudience so the rejection is proven to come from the token-type
+// gate, not from an audience mismatch.
 func TestOIDCAuth_RejectsIDToken(t *testing.T) {
 	s := newTestSigner(t)
 	auth := testAuthenticator(verifierFor(s.priv.Public()))
 
-	claims := validClaims("id-token-user")
-	claims["token_use"] = "id"
-
-	var got string
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
-	req.Header.Set("Authorization", "Bearer "+s.sign(t, claims))
-	rr := httptest.NewRecorder()
-	auth.Handler(capturingNext(&got)).ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Fatalf("id token: got status %d, want 401 (body=%q)", rr.Code, rr.Body.String())
+	cases := []struct {
+		name   string
+		mutate func(claims map[string]any)
+	}{
+		{"token_use=id", func(c map[string]any) { c["token_use"] = "id" }},
+		{"nonce present (aud==audience, no token_use)", func(c map[string]any) { c["nonce"] = "n-0S6_WzA2Mj" }},
+		{"at_hash present", func(c map[string]any) { c["at_hash"] = "77QmUPtjPfzWtF2AnpK9RQ" }},
+		{"c_hash present", func(c map[string]any) { c["c_hash"] = "LDktKdoQak3Pk0cnXxCltA" }},
 	}
-	if got != "" {
-		t.Errorf("id token must not authenticate, got user id %q", got)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			claims := validClaims("id-token-user") // aud == testAudience
+			c.mutate(claims)
+
+			var got string
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
+			req.Header.Set("Authorization", "Bearer "+s.sign(t, claims))
+			rr := httptest.NewRecorder()
+			auth.Handler(capturingNext(&got)).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("id token: got status %d, want 401 (body=%q)", rr.Code, rr.Body.String())
+			}
+			if got != "" {
+				t.Errorf("id token must not authenticate, got user id %q", got)
+			}
+		})
 	}
 }
 
@@ -235,17 +253,20 @@ func TestOIDCAuth_PropagatesRoles(t *testing.T) {
 	s := newTestSigner(t)
 	auth := testAuthenticator(verifierFor(s.priv.Public()))
 
+	// DENY BY DEFAULT (fix #3): the shipped mapping trusts NO IdP group/role name,
+	// so every token — including one carrying a raw "admin" group — propagates an
+	// EMPTY internal role set. Authentication still succeeds (roles never gate
+	// authn); only elevated/cross-user authorisation is withheld.
 	cases := []struct {
 		name   string
 		roles  any // claim value to set, or nil to omit the claim entirely
 		groups any
 		want   []string
 	}{
-		{"roles claim propagates", []string{"admin"}, nil, []string{"admin"}},
-		{"groups claim propagates", nil, []string{"eng"}, []string{"eng"}},
-		{"union and de-duplication", []string{"admin"}, []string{"admin", "eng"}, []string{"admin", "eng"}},
+		{"raw admin role grants nothing by default", []string{"admin"}, nil, nil},
+		{"raw admin group grants nothing by default", nil, []string{"admin"}, nil},
+		{"arbitrary groups grant nothing by default", []string{"eng"}, []string{"team-lead", "eng"}, nil},
 		{"empty when both absent", nil, nil, nil},
-		{"blank entries dropped", []string{"admin", ""}, []string{"", "eng"}, []string{"admin", "eng"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -283,29 +304,56 @@ func TestOIDCAuth_PropagatesRoles(t *testing.T) {
 	}
 }
 
-// TestMapClaimsToRoles is the direct, pure-function test of the mapping the
-// middleware test above exercises through the wire. Order is deterministic:
-// roles first, then groups, each de-duplicated, empty strings dropped.
+// TestMapClaimsToRoles proves the shipped default is DENY BY DEFAULT: with the
+// empty trusted allowlist, no IdP role/group name — including "admin" — maps to
+// any internal role.
 func TestMapClaimsToRoles(t *testing.T) {
+	cases := []struct {
+		name   string
+		roles  []string
+		groups []string
+	}{
+		{"admin role grants nothing", []string{"admin"}, nil},
+		{"admin group grants nothing", nil, []string{"admin"}},
+		{"mixed names grant nothing", []string{"admin", "user"}, []string{"team-lead", "eng"}},
+		{"blank entries", []string{"admin", ""}, []string{"", "eng"}},
+		{"both empty", nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := mapClaimsToRoles(c.roles, c.groups); len(got) != 0 {
+				t.Errorf("mapClaimsToRoles(%v, %v) = %v, want empty (deny by default)", c.roles, c.groups, got)
+			}
+		})
+	}
+}
+
+// TestMapClaimsToRolesWith proves the allowlist MECHANISM an adopter opts into:
+// only names present in the trusted map are translated to their internal role,
+// untrusted names are dropped, and the result is de-duplicated in
+// roles-then-groups order.
+func TestMapClaimsToRolesWith(t *testing.T) {
+	trusted := map[string]string{
+		"eng-admins": "admin",
+		"team-leads": "team-lead",
+	}
 	cases := []struct {
 		name   string
 		roles  []string
 		groups []string
 		want   []string
 	}{
-		{"roles only", []string{"admin"}, nil, []string{"admin"}},
-		{"groups only", nil, []string{"eng"}, []string{"eng"}},
-		{"union preserves roles-then-groups order", []string{"admin"}, []string{"eng"}, []string{"admin", "eng"}},
-		{"de-duplicates across roles and groups", []string{"admin"}, []string{"admin", "eng"}, []string{"admin", "eng"}},
-		{"de-duplicates within roles", []string{"admin", "admin"}, nil, []string{"admin"}},
-		{"drops blank entries", []string{"admin", ""}, []string{"", "eng"}, []string{"admin", "eng"}},
-		{"both empty yields nil", nil, nil, nil},
+		{"trusted group maps to internal role", nil, []string{"eng-admins"}, []string{"admin"}},
+		{"untrusted name dropped", nil, []string{"admin"}, nil},
+		{"mix of trusted and untrusted", []string{"eng-admins"}, []string{"team-leads", "randoms"}, []string{"admin", "team-lead"}},
+		{"de-duplicates mapped roles", []string{"eng-admins"}, []string{"eng-admins"}, []string{"admin"}},
+		{"blank and untrusted dropped", []string{""}, []string{"nope"}, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := mapClaimsToRoles(c.roles, c.groups)
+			got := mapClaimsToRolesWith(trusted, c.roles, c.groups)
 			if !equalRoles(got, c.want) {
-				t.Errorf("mapClaimsToRoles(%v, %v) = %v, want %v", c.roles, c.groups, got, c.want)
+				t.Errorf("mapClaimsToRolesWith(%v, %v) = %v, want %v", c.roles, c.groups, got, c.want)
 			}
 		})
 	}

@@ -107,6 +107,13 @@ func TestLoad_FailsOnMalformedInt(t *testing.T) {
 
 // setRequiredDBEnv sets the minimum env vars Load() needs to succeed so a test
 // can focus on the one variable it is exercising.
+//
+// It also CLEARS the optional auth env vars to a known-empty baseline so the
+// auth-config subtests are HERMETIC: they must observe the documented defaults
+// (OIDC/OPA disabled) regardless of what the developer or the integration stack
+// has exported into the ambient environment (e.g. OPA_URL when running
+// `make verify` against a live OPA sidecar). t.Setenv restores the prior values
+// at test end.
 func setRequiredDBEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DB_HOST", "db")
@@ -114,6 +121,15 @@ func setRequiredDBEnv(t *testing.T) {
 	t.Setenv("DB_USER", "u")
 	t.Setenv("DB_PASSWORD", "p")
 	t.Setenv("DB_NAME", "d")
+
+	// Auth vars default to "disabled if unset"; clear any ambient values so a
+	// subtest starts from that documented baseline and sets only what it needs.
+	for _, k := range []string{
+		"OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_ENABLED",
+		"OPA_URL", "OPA_ENABLED", "OPA_DECISION_PATH", "OPA_TIMEOUT_MS",
+	} {
+		t.Setenv(k, "")
+	}
 }
 
 // TestLoad_RejectsNonPositiveDurations verifies every server timeout and DB

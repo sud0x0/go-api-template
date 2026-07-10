@@ -4,18 +4,28 @@ info:
   description: |
     Template API. Replace this description with your project details.
 
-    ## Authentication
+    ## Authentication and authorisation
 
-    Authentication is enforced at the middleware layer but **not yet implemented** in this template.
-    Protected endpoints require a valid JWT access token in the `Authorization` header using the Bearer scheme.
+    This template ships a working two-layer model, both layers **opt-in and off by
+    default** so local dev needs no IdP. The app is an OAuth2 **resource server**:
+    protected endpoints require a valid JWT **access token** in the `Authorization`
+    header using the Bearer scheme.
 
-    When implementing authentication, validate these claims:
-    - `iss` — must match your expected issuer
-    - `aud` — must match your API identifier
-    - `exp` — must not be expired
-    - `nbf` — must not be used before this time
-    - `alg` — server-side whitelist only (enforce RS256)
-    - `kid` — must match a key in your JWKS
+    **Layer 1 — authentication (OIDC):** the middleware verifies the access token
+    against the IdP's discovered JWKS. It enforces:
+    - `iss` — must match the configured issuer (exact match)
+    - `aud` — must equal this API's own audience identifier (`OIDC_AUDIENCE`), NOT a
+      browser client_id; an ID token (whose `aud` is the client_id) is rejected
+    - `exp` / `nbf` — validity window
+    - `alg` — signature-algorithm allowlist: **RS256 and ES256** only (never `none`)
+    - `kid` — key material only from the discovered JWKS
+    ID tokens are additionally rejected via `token_use` and OIDC-Core ID-token-only
+    claims (`nonce`/`at_hash`/`c_hash`).
+
+    **Layer 2 — authorisation (OPA):** after authentication, an Open Policy Agent
+    sidecar decides each request fail-closed. Row-ownership is additionally enforced
+    in SQL (`WHERE user_id = $N`). See the README "Authentication and Authorisation"
+    section for configuration.
 
   version: 0.1.0
 
@@ -377,9 +387,10 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
-# NOTE: Authentication is enforced at the middleware layer but not yet implemented
-# in this template. Implement auth middleware that validates JWTs and sets user_id
-# in the request context. See README.md for the auth contract.
+# NOTE: Authentication and authorisation ARE implemented (OIDC access-token
+# validation + OPA authorisation), both opt-in and off by default. The auth
+# middleware validates the access token and sets user_id in the request context.
+# See README.md "Authentication and Authorisation" for the contract and config.
 
 components:
   securitySchemes:
@@ -388,9 +399,11 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT access token. Authentication middleware is not implemented in this template —
-        implement your own middleware that validates tokens and sets user_id in context.
-        Recommended: RS256-signed tokens with validated `iss`, `aud`, `exp`, `nbf` claims.
+        JWT access token, validated by the OIDC authentication middleware against
+        the IdP's discovered JWKS. Signature algorithms are restricted to RS256 and
+        ES256 (never `none`); `iss`, `aud` (this API's audience, not a client_id),
+        `exp`, and `nbf` are validated, and ID tokens are rejected. Authentication
+        is off by default (set `OIDC_ISSUER_URL` to enable). See README.md.
 
   parameters:
     LogID:

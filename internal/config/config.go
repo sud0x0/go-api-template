@@ -155,10 +155,21 @@ type OIDCConfig struct {
 	// configuration to it and validates that the discovered issuer matches this
 	// value EXACTLY (ASVS V10.5.3). Empty disables auth.
 	IssuerURL string
-	// Audience is the expected token audience from OIDC_AUDIENCE (typically this
-	// service's client id). It is passed to the verifier as ClientID so the aud
-	// claim is validated (ASVS V9.2.3 / V10.3.1). Required when OIDC is enabled:
-	// an empty audience would force go-oidc's SkipClientIDCheck, which we never do.
+	// Audience is the expected token audience from OIDC_AUDIENCE. Set it to THIS
+	// API's own resource/audience identifier — the value your IdP stamps into the
+	// `aud` of ACCESS tokens issued for this API (e.g. an API identifier such as
+	// "https://api.example.com" or a resource/scope audience). It is passed to the
+	// verifier as ClientID so the `aud` claim is validated (ASVS V9.2.3 / V10.3.1).
+	//
+	// SECURITY — do NOT set this to a browser/SPA client_id. An OIDC ID token's
+	// `aud` IS the client_id, so if OIDC_AUDIENCE equals a client_id the audience
+	// check stops distinguishing ID tokens from access tokens and an ID token
+	// would pass audience validation (token-type confusion). Using the API's own
+	// distinct audience makes an ID token (aud = client_id) fail this check. The
+	// middleware additionally rejects ID-token-only claims as defence in depth.
+	//
+	// Required when OIDC is enabled: an empty audience would force go-oidc's
+	// SkipClientIDCheck, which we never do.
 	Audience string
 }
 
@@ -508,7 +519,9 @@ func (c *Config) validate() error {
 	// OIDC authentication, when enabled, needs a discovery issuer AND an audience.
 	// The issuer is where go-oidc fetches the JWKS and is matched exactly; the
 	// audience is passed to the verifier as ClientID so the aud claim is checked
-	// (ASVS V9.2.3 / V10.3.1). We require the audience rather than let it be empty
+	// (ASVS V9.2.3 / V10.3.1). It must be THIS API's own audience identifier, not
+	// a browser client_id (see the OIDCConfig.Audience doc for the token-type
+	// confusion this avoids). We require the audience rather than let it be empty
 	// because an empty ClientID forces go-oidc's SkipClientIDCheck, accepting
 	// tokens minted for any audience, which this template never does.
 	if c.Auth.OIDC.Enabled {
@@ -521,7 +534,8 @@ func (c *Config) validate() error {
 		if c.Auth.OIDC.Audience == "" {
 			return fmt.Errorf(
 				"OIDC_ENABLED=true requires OIDC_AUDIENCE to be set " +
-					"(the expected token audience / client id; an empty audience would disable aud validation)",
+					"(this API's own resource/audience identifier stamped into ACCESS tokens, " +
+					"NOT a browser client_id; an empty audience would disable aud validation)",
 			)
 		}
 	}

@@ -48,8 +48,16 @@ default allow := false
 log_actions := {"read", "create", "update", "delete"}
 
 # The request targets the log feature. resource is the chi ROUTE PATTERN
-# (bounded), never the raw path.
-is_logs if startswith(input.resource, "/api/v1/logs")
+# (bounded leaf, e.g. "/api/v1/logs" or "/api/v1/logs/{id}"), never the raw path.
+#
+# ANCHORED on purpose: match the exact collection path OR the "/api/v1/logs/"
+# sub-path prefix, NOT a bare startswith("/api/v1/logs"). A bare prefix would also
+# match an adjacent route like "/api/v1/logsettings" or "/api/v1/logs-admin",
+# letting a future sibling endpoint silently inherit the logs policy. Requiring
+# the trailing slash for sub-paths keeps the boundary exact.
+is_logs if input.resource == "/api/v1/logs"
+
+is_logs if startswith(input.resource, "/api/v1/logs/")
 
 # --- SELF-ACCESS ---------------------------------------------------------------
 # An authenticated subject may act on its OWN objects (target_user == subject).

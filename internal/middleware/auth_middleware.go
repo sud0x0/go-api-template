@@ -102,11 +102,19 @@ func NewOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig, log logger
 // tokenClaims captures only the claims the middleware inspects beyond what
 // go-oidc validates structurally. token_use is how some IdPs (e.g. AWS Cognito)
 // mark whether a token is an access or id token; see the V9.2.2 note in Handler.
-// Roles/Groups feed the vendor-agnostic role boundary (see mapClaimsToRoles).
+// Nonce/AtHash/CHash are ID-token-ONLY claims used to positively reject an ID
+// token presented as an access token. Roles/Groups feed the vendor-agnostic role
+// boundary (see mapClaimsToRoles).
 type tokenClaims struct {
 	TokenUse string   `json:"token_use"`
 	Roles    []string `json:"roles"`
 	Groups   []string `json:"groups"`
+	// nonce, at_hash and c_hash are defined by OIDC Core (§2, §3.1.3.6, §3.3.2.11)
+	// exclusively for ID tokens: an access token never carries them. Their
+	// presence therefore POSITIVELY identifies an ID token regardless of IdP.
+	Nonce  string `json:"nonce"`
+	AtHash string `json:"at_hash"`
+	CHash  string `json:"c_hash"`
 }
 
 // rolesContextKey is the package-private context key carrying the caller's
@@ -137,23 +145,51 @@ func rolesFromContext(ctx context.Context) []string {
 // the policy are independently swappable: change IdPs and you only re-point this
 // function, the policy is untouched.
 //
-// The template ships a passthrough (roles ∪ groups, de-duplicated) because it
-// cannot know an adopter's group names. Replace the body with your real mapping,
-// e.g. translate the Okta group "eng-admins" to the internal role "admin". The
-// starter Rego policy (deploy/opa/policy.rego) is written against internal roles
-// like "admin" and "user", not IdP group names.
+// DENY BY DEFAULT: the shipped template maps EVERY token to an EMPTY internal
+// role set. This is deliberate. The starter policy (deploy/opa/policy.rego)
+// grants global cross-user access to anyone whose role set contains the literal
+// "admin"; a verbatim passthrough of the token's roles ∪ groups would hand that
+// privilege to any caller whose IdP token merely carries a group named "admin"
+// (a name the adopter does not control and an attacker may be able to obtain).
+// So the default trusts NO IdP group name as an internal role. Self-access still
+// works (the policy's self rule is role-independent); only elevated/cross-user
+// access is withheld until the adopter opts in below.
+//
+// TO ENABLE ROLES: populate the `trusted` allowlist below with the SPECIFIC IdP
+// group/role names you control, mapped to internal role names (e.g.
+// "eng-admins" → "admin"). Only names in the allowlist become internal roles;
+// everything else is dropped. This is the safe inverse of the old verbatim
+// passthrough (roles ∪ groups), which trusted arbitrary IdP group names and so
+// handed "admin" to anyone whose token merely carried a group called "admin".
+// mapClaimsToRoles is exercised by the middleware tests.
 func mapClaimsToRoles(roles, groups []string) []string {
+	// The trusted mapping from IdP group/role names to INTERNAL role names.
+	// EMPTY by default → deny by default: no token grants any internal role until
+	// an adopter curates this map. Example: map[string]string{
+	// "eng-admins": "admin", "team-leads": "team-lead"}.
+	return mapClaimsToRolesWith(map[string]string{}, roles, groups)
+}
+
+// mapClaimsToRolesWith translates the token's IdP role/group names to internal
+// role names using an EXPLICIT trusted allowlist: only a name present in
+// `trusted` becomes its mapped internal role; every other name is dropped. The
+// result is de-duplicated, preserving roles-then-groups order. It is split out
+// from mapClaimsToRoles so the mapping mechanism is unit-testable with a curated
+// allowlist without any mutable global state (the shipped default passes an empty
+// map, which denies by default).
+func mapClaimsToRolesWith(trusted map[string]string, roles, groups []string) []string {
 	seen := make(map[string]struct{}, len(roles)+len(groups))
 	var out []string
-	for _, r := range append(append([]string{}, roles...), groups...) {
-		if r == "" {
+	for _, name := range append(append([]string{}, roles...), groups...) {
+		internal, ok := trusted[name]
+		if !ok {
+			continue // untrusted IdP name → not an internal role
+		}
+		if _, dup := seen[internal]; dup {
 			continue
 		}
-		if _, dup := seen[r]; dup {
-			continue
-		}
-		seen[r] = struct{}{}
-		out = append(out, r)
+		seen[internal] = struct{}{}
+		out = append(out, internal)
 	}
 	return out
 }
@@ -182,19 +218,28 @@ func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// V9.2.2: token type. Only ACCESS tokens may drive authorisation; an id
+		// V9.2.2: token type. Only ACCESS tokens may drive authorisation; an ID
 		// token proves authentication to a client and must not be accepted here.
-		// There is no universal claim distinguishing the two: RFC 9068 marks
-		// access tokens with a JOSE header `typ: at+jwt` that go-oidc does not
-		// surface, so where an IdP exposes token use via a CLAIM we check it, and
-		// otherwise we DOCUMENT the assumption that the caller presents an access
-		// token. The audience check (V9.2.3) already blocks id tokens minted for a
-		// different audience. Cognito's `token_use` is the concrete claim checked.
+		//
+		// The PRIMARY guard is the audience check (V9.2.3): OIDC_AUDIENCE must be
+		// this API's own resource identifier that the IdP stamps into ACCESS tokens'
+		// `aud`, distinct from any browser client_id. An ID token's `aud` is the
+		// client_id, so it fails the audience check. (This only holds if the
+		// operator followed the OIDC_AUDIENCE guidance in config.go; setting it to a
+		// browser client_id re-opens the confusion.)
+		//
+		// Layered on top, a POSITIVE token-type assertion rejects an ID token even
+		// when its audience happens to match: token_use=="id" (Cognito) OR the
+		// presence of any OIDC-Core ID-token-ONLY claim (nonce / at_hash / c_hash),
+		// which an access token never carries. There is no universal positive
+		// access-token signal go-oidc surfaces (RFC 9068's `typ: at+jwt` JOSE header
+		// is not exposed and non-9068 IdPs omit it), so we detect the ID token
+		// instead of trying to prove the access token.
 		var claims tokenClaims
 		// A claims-decode error is non-fatal for role extraction (roles simply
-		// stay empty), but token_use is a hard gate when present.
+		// stay empty), but the token-type gate below is enforced when present.
 		_ = idToken.Claims(&claims)
-		if claims.TokenUse == "id" {
+		if claims.TokenUse == "id" || claims.Nonce != "" || claims.AtHash != "" || claims.CHash != "" {
 			logger.FromContext(r.Context(), a.log).LogDebug("rejected id token used as access token")
 			shared.WriteUnauthorised(w, shared.ErrTypeUnauthorised, "id token not accepted for authorization")
 			return

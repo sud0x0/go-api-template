@@ -132,8 +132,16 @@ func TestOPAAuth_UnreachableFailsClosed(t *testing.T) {
 }
 
 // The decision input document carries the bounded, well-formed fields: the
-// internal subject UUID, the mapped action, the chi route pattern (never the raw
-// path), the method, and the caller's roles.
+// internal subject UUID, the mapped action, the method, and the caller's roles.
+//
+// NOTE on the resource field: this test drives the middleware in ISOLATION (no
+// router), so chi has resolved NO route pattern and input.resource is the honest
+// "unknown" sentinel. The real, load-bearing resource assertion — that OPA
+// receives the LEAF pattern, not the mount "/api/v1/*" — lives in
+// TestOPAAuth_ResourceIsLeafPattern_RealRouter, which assembles the router the
+// way cmd/api/main.go does. An earlier version of this test hand-populated
+// rctx.RoutePatterns to fake a resolved pattern; that masked the mount-pattern
+// bug because production never populates it at middleware time.
 func TestOPAAuth_BuildsBoundedInput(t *testing.T) {
 	var got opaInput
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -147,12 +155,9 @@ func TestOPAAuth_BuildsBoundedInput(t *testing.T) {
 	authz := opaAuthorizerFor(srv.URL, time.Second)
 
 	const uid = "11111111-1111-1111-1111-111111111111"
-	// Carry an authenticated subject + roles, and a chi route pattern, as the auth
-	// middleware and router would have set them.
-	rctx := chi.NewRouteContext()
-	rctx.RoutePatterns = []string{"/api/v1/logs/{id}"}
-	ctx := context.WithValue(context.Background(), chi.RouteCtxKey, rctx)
-	ctx = shared.WithUserID(ctx, uid)
+	// Carry an authenticated subject + roles as the auth middleware would have set
+	// them. Deliberately NO chi route context is injected: see the note above.
+	ctx := shared.WithUserID(context.Background(), uid)
 	ctx = withRoles(ctx, []string{"admin"})
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/logs/abc", nil).WithContext(ctx)
@@ -169,14 +174,78 @@ func TestOPAAuth_BuildsBoundedInput(t *testing.T) {
 	if got.Action != "delete" {
 		t.Errorf("action: got %q, want %q (DELETE maps to delete)", got.Action, "delete")
 	}
-	if got.Resource != "/api/v1/logs/{id}" {
-		t.Errorf("resource: got %q, want the chi route pattern %q", got.Resource, "/api/v1/logs/{id}")
+	if got.Resource != "unknown" {
+		t.Errorf("resource without a resolved router: got %q, want %q (leaf-pattern resolution is covered by the real-router test)", got.Resource, "unknown")
 	}
 	if got.Method != http.MethodDelete {
 		t.Errorf("method: got %q, want %q", got.Method, http.MethodDelete)
 	}
 	if len(got.Roles) != 1 || got.Roles[0] != "admin" {
 		t.Errorf("roles: got %v, want [admin]", got.Roles)
+	}
+}
+
+// TestOPAAuth_ResourceIsLeafPattern_RealRouter is the decisive regression guard
+// for the mount-pattern bug (fix #1). It assembles the /api/v1 router EXACTLY as
+// cmd/api/main.go does — via middleware.AuthorizedRoutes, so authz runs as an
+// inline-group (post-routing) middleware — points OPA at a capturing stub, and
+// asserts that input.resource is the resolved chi LEAF pattern ("/api/v1/logs",
+// "/api/v1/logs/{id}"), NEVER the mount pattern "/api/v1/*". Before the fix, a
+// plain r.Use(authz) on the subrouter sent "/api/v1/*" and every request 403'd.
+func TestOPAAuth_ResourceIsLeafPattern_RealRouter(t *testing.T) {
+	var lastResource string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req opaRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		lastResource = req.Input.Resource
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"result": true}`) // allow so the request reaches the handler
+	}))
+	t.Cleanup(srv.Close)
+	authz := opaAuthorizerFor(srv.URL, time.Second)
+
+	// Stub authn injects an authenticated subject exactly as the OIDC middleware
+	// would (pre-routing), so authz sees a real caller.
+	const uid = "11111111-1111-1111-1111-111111111111"
+	stubAuthn := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(shared.WithUserID(r.Context(), uid)))
+		})
+	}
+	handlerHit := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+
+	router := chi.NewRouter()
+	router.Route("/api/v1", func(r chi.Router) {
+		AuthorizedRoutes(r, stubAuthn, authz.Handler, func(r chi.Router) {
+			r.Get("/logs", handlerHit)
+			r.Get("/logs/{id}", handlerHit)
+		})
+	})
+
+	cases := []struct {
+		path         string
+		wantResource string
+	}{
+		{path: "/api/v1/logs", wantResource: "/api/v1/logs"},
+		{path: "/api/v1/logs/abc123", wantResource: "/api/v1/logs/{id}"},
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			lastResource = ""
+			req := httptest.NewRequest(http.MethodGet, c.path, nil)
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected the allow to reach the handler (200), got %d", rr.Code)
+			}
+			if lastResource == "/api/v1/*" {
+				t.Fatalf("OPA received the MOUNT pattern %q — the mount-pattern bug is back", lastResource)
+			}
+			if lastResource != c.wantResource {
+				t.Errorf("input.resource: got %q, want the leaf pattern %q", lastResource, c.wantResource)
+			}
+		})
 	}
 }
 

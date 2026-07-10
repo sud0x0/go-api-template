@@ -341,35 +341,37 @@ func main() {
 
 		// API routes.
 		r.Route("/api/v1", func(r chi.Router) {
-			// Two-layer auth model (see .claude/rules/decisions.md). Middlewares
-			// run in registration order, so LAYER 1 authentication is registered
-			// before LAYER 2 authorisation: a request must be authenticated before
-			// it is policy-checked. Both are opt-in. When a layer is disabled its
-			// value is nil and it is not registered, so local dev with no IdP / no
-			// OPA still works.
+			// Two-layer auth model (see .claude/rules/decisions.md #13/#17). Both
+			// layers are opt-in; a disabled layer is nil and simply not registered,
+			// so local dev with no IdP / no OPA still works.
 			//
-			// Layer 1 (OIDC): validates the Bearer access token against the IdP's
-			// discovered JWKS and stores the caller's internal UUID via
-			// shared.WithUserID. Handlers read it back via
-			// shared.UserIDFromContext. The key lives in internal/shared so this
-			// infrastructure middleware never imports a feature package.
+			// Layer 1 (OIDC, authn): validates the Bearer access token against the
+			// IdP's discovered JWKS and stores the caller's internal UUID via
+			// shared.WithUserID. Handlers read it back via shared.UserIDFromContext.
+			// The key lives in internal/shared so this infrastructure middleware
+			// never imports a feature package.
 			//
-			// Layer 2 (OPA): FUNCTION-LEVEL authorisation over OPA's REST Data API,
-			// fail closed. It does NOT replace the repository's WHERE user_id = $N
-			// row-ownership scoping. The two layers are deliberately SEPARATE: OPA
-			// answers "may this role call this endpoint", the SQL answers "may this
-			// user see this row". A future change must not collapse them by pushing
-			// row filtering into OPA.
+			// Layer 2 (OPA, authz): FUNCTION-LEVEL authorisation over OPA's REST Data
+			// API, fail closed. It does NOT replace the repository's WHERE user_id =
+			// $N row-ownership scoping — the two layers stay SEPARATE (OPA: "may this
+			// role call this endpoint"; SQL: "may this user see this row").
+			//
+			// The ORDER (authn before authz) and the chi REGISTRATION KIND both
+			// matter: authz MUST be an inline-Group middleware so it runs AFTER chi
+			// has resolved the leaf route pattern, otherwise OPA receives the mount
+			// pattern "/api/v1/*" and denies everything. middleware.AuthorizedRoutes
+			// encapsulates that wiring (and is exercised by the middleware tests), so
+			// this call is the single source of truth for it.
+			var authn, authz func(http.Handler) http.Handler
 			if oidcAuth != nil {
-				r.Use(oidcAuth.Handler)
+				authn = oidcAuth.Handler
 			}
 			if opaAuthz != nil {
-				r.Use(opaAuthz.Handler)
+				authz = opaAuthz.Handler
 			}
-
-			// Each feature registers its own routes. Adding a feature is one line
-			// here, not five. See userlog.Handler.Routes.
-			logHandler.Routes(r)
+			// Each feature registers its own routes inside the authorised group.
+			// Adding a feature is one line here. See userlog.Handler.Routes.
+			middleware.AuthorizedRoutes(r, authn, authz, logHandler.Routes)
 		})
 	})
 

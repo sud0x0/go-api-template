@@ -2,7 +2,7 @@ module github.com/sud0x0/go-api-template
 
 go 1.26
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0

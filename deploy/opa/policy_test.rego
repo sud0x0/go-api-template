@@ -193,3 +193,29 @@ test_unknown_resource_denied if {
 		"target_user": admin_id,
 	}
 }
+
+# --- anchored is_logs (tripwire for the unbounded-prefix fix) ---
+
+# The exact collection path and the "/api/v1/logs/{id}" sub-path are logs routes.
+test_is_logs_matches_collection if is_logs with input as {"resource": "/api/v1/logs"}
+
+test_is_logs_matches_item if is_logs with input as {"resource": "/api/v1/logs/{id}"}
+
+# An ADJACENT route that merely shares the "/api/v1/logs" prefix is NOT a logs
+# route: a bare startswith would wrongly match these, so this is the tripwire.
+test_is_logs_rejects_adjacent_settings if not is_logs with input as {"resource": "/api/v1/logsettings"}
+
+test_is_logs_rejects_adjacent_admin if not is_logs with input as {"resource": "/api/v1/logs-admin"}
+
+# Because is_logs is false for an adjacent route, even an admin is denied there
+# (defence in depth: the sibling can't inherit the logs policy).
+test_admin_denied_on_adjacent_route if {
+	not allow with input as {
+		"subject": admin_id,
+		"roles": ["admin"],
+		"action": "read",
+		"resource": "/api/v1/logsettings",
+		"method": "GET",
+		"target_user": admin_id,
+	}
+}

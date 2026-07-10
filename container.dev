@@ -6,7 +6,7 @@
 # amd64 + arm64). Tag is mutable, digest is immutable. Keep in sync with the
 # builder stage in container.prod. To bump: re-resolve the tag's manifest-list
 # digest and update the tag comment with it.
-FROM golang@sha256:3ad57304ad93bbec8548a0437ad9e06a455660655d9af011d58b993f6f615648
+FROM golang@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2
 
 # Pin tool versions for reproducible local development.
 # goose CLI is intentionally NOT installed — migrations are run via the
