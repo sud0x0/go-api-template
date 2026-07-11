@@ -10,7 +10,7 @@ Teams starting a new Go backend who want solid security, testing, and release ha
 
 The rest of this file is reference material. The [Quick start](#quick-start) gets you running. The sections below cover configuration, deployment, and conventions in depth.
 
----
+This is not a "get to production fast" template, this is a "get to production correctly" template.
 
 ## Contents
 
@@ -122,29 +122,29 @@ All env vars are read once at startup by [`internal/config`](internal/config/con
 
 ### Optional
 
-| Variable                          | Default      | Notes                                                                                             |
-| --------------------------------- | ------------ | ------------------------------------------------------------------------------------------------- |
-| `PORT`                            | `8080`       | Public API port                                                                                   |
-| `METRICS_PORT`                    | `9090`       | Internal admin port, restrict at infra layer                                                      |
-| `SERVER_READ_HEADER_TIMEOUT_SECS` | `5`          |                                                                                                   |
-| `SERVER_READ_TIMEOUT_SECS`        | `10`         |                                                                                                   |
-| `SERVER_WRITE_TIMEOUT_SECS`       | `65`         | Must be > `SERVER_REQUEST_TIMEOUT_SECS` (validated at startup)                                    |
-| `SERVER_IDLE_TIMEOUT_SECS`        | `120`        |                                                                                                   |
-| `SERVER_REQUEST_TIMEOUT_SECS`     | `60`         | Per-request handler timeout (chi Timeout)                                                         |
-| `LOG_LEVEL`                       | `production` | `development` / `production` / `quiet` / `silent` (default is fail-safe `production`)             |
+| Variable                          | Default      | Notes                                                                                                                                 |
+| --------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                            | `8080`       | Public API port                                                                                                                       |
+| `METRICS_PORT`                    | `9090`       | Internal admin port, restrict at infra layer                                                                                          |
+| `SERVER_READ_HEADER_TIMEOUT_SECS` | `5`          |                                                                                                                                       |
+| `SERVER_READ_TIMEOUT_SECS`        | `10`         |                                                                                                                                       |
+| `SERVER_WRITE_TIMEOUT_SECS`       | `65`         | Must be > `SERVER_REQUEST_TIMEOUT_SECS` (validated at startup)                                                                        |
+| `SERVER_IDLE_TIMEOUT_SECS`        | `120`        |                                                                                                                                       |
+| `SERVER_REQUEST_TIMEOUT_SECS`     | `60`         | Per-request handler timeout (chi Timeout)                                                                                             |
+| `LOG_LEVEL`                       | `production` | `development` / `production` / `quiet` / `silent` (default is fail-safe `production`)                                                 |
 | `DB_SSLMODE`                      | `require`    | `require` encrypts but does **not** verify the server. Use `verify-full` + a CA across untrusted networks (see [Database](#database)) |
-| `DB_MAX_OPEN_CONNS`               | `100`        | pgxpool MaxConns                                                                                  |
-| `DB_MIN_CONNS`                    | `10`         | pgxpool MinConns (eagerly maintained)                                                             |
-| `DB_CONN_MAX_LIFETIME_MINS`       | `5`          |                                                                                                   |
-| `DB_CONN_MAX_IDLE_TIME_MINS`      | `10`         |                                                                                                   |
-| `TRUST_PROXY_HEADERS`             | `false`      | Trust `X-Forwarded-For`/`X-Real-IP` (`chimw.RealIP`). Enable only behind a trusted proxy.         |
-| `RATE_LIMIT_RPM`                  | `0`          | App-level requests/min per IP. `0` disables (middleware not registered). Edge-less fallback only. |
-| `PUBLIC_READINESS`                | `true`       | Serve `/readyz` + `/health` on the public listener. `false` keeps them internal-only.             |
-| `CORS_ALLOWED_ORIGINS`            | (empty)      | Comma-separated. Never `*` in production.                                                         |
-| `CORS_ALLOW_CREDENTIALS`          | `false`      | Set `true` only if browser clients send cookies                                                   |
-| `MIGRATOR_LOCK_TIMEOUT`           | `5s`         | Postgres `lock_timeout` for the migration session                                                 |
-| `MIGRATOR_STATEMENT_TIMEOUT`      | `10min`      | Postgres `statement_timeout` for the migration session                                            |
-| `MIGRATOR_ALLOW_DESTRUCTIVE`      | `false`      | Gate for `down`/`down-to`/`redo`/`reset` (needs `--confirm-destructive` too)                      |
+| `DB_MAX_OPEN_CONNS`               | `100`        | pgxpool MaxConns                                                                                                                      |
+| `DB_MIN_CONNS`                    | `10`         | pgxpool MinConns (eagerly maintained)                                                                                                 |
+| `DB_CONN_MAX_LIFETIME_MINS`       | `5`          |                                                                                                                                       |
+| `DB_CONN_MAX_IDLE_TIME_MINS`      | `10`         |                                                                                                                                       |
+| `TRUST_PROXY_HEADERS`             | `false`      | Trust `X-Forwarded-For`/`X-Real-IP` (`chimw.RealIP`). Enable only behind a trusted proxy.                                             |
+| `RATE_LIMIT_RPM`                  | `0`          | App-level requests/min per IP. `0` disables (middleware not registered). Edge-less fallback only.                                     |
+| `PUBLIC_READINESS`                | `true`       | Serve `/readyz` + `/health` on the public listener. `false` keeps them internal-only.                                                 |
+| `CORS_ALLOWED_ORIGINS`            | (empty)      | Comma-separated. Never `*` in production.                                                                                             |
+| `CORS_ALLOW_CREDENTIALS`          | `false`      | Set `true` only if browser clients send cookies                                                                                       |
+| `MIGRATOR_LOCK_TIMEOUT`           | `5s`         | Postgres `lock_timeout` for the migration session                                                                                     |
+| `MIGRATOR_STATEMENT_TIMEOUT`      | `10min`      | Postgres `statement_timeout` for the migration session                                                                                |
+| `MIGRATOR_ALLOW_DESTRUCTIVE`      | `false`      | Gate for `down`/`down-to`/`redo`/`reset` (needs `--confirm-destructive` too)                                                          |
 
 ### Version banner
 
@@ -215,7 +215,7 @@ On startup the middleware does OIDC discovery against `OIDC_ISSUER_URL` and buil
 
 What the verifier enforces (each cited by ASVS ID in [`auth_middleware.go`](internal/middleware/auth_middleware.go)): signature valid against the discovered keys, an explicit algorithm allowlist (RS256 and ES256, never `none`), key material only from the trusted JWKS (a token-supplied `jku`/`x5u`/`jwk` is ignored), `exp`/`nbf` validity, audience checked against `OIDC_AUDIENCE`, and the user identified from `iss` plus `sub` (never a mutable claim like email). The issuer must match `OIDC_ISSUER_URL` exactly. `oidc.InsecureIssuerURLContext` is not used.
 
-**Set `OIDC_AUDIENCE` to this API's own audience, not a client_id.** It must be the resource/audience identifier your IdP stamps into **access** tokens for this API (for example `https://api.example.com`). Do **not** set it to a browser/SPA `client_id`: an OIDC **ID token's** `aud` *is* the `client_id`, so if `OIDC_AUDIENCE` equals a `client_id` the audience check can no longer tell an ID token from an access token (token-type confusion).
+**Set `OIDC_AUDIENCE` to this API's own audience, not a client_id.** It must be the resource/audience identifier your IdP stamps into **access** tokens for this API (for example `https://api.example.com`). Do **not** set it to a browser/SPA `client_id`: an OIDC **ID token's** `aud` _is_ the `client_id`, so if `OIDC_AUDIENCE` equals a `client_id` the audience check can no longer tell an ID token from an access token (token-type confusion).
 
 **Token type.** Only access tokens are accepted for authorisation. The audience check above is the primary guard (an ID token's `aud` is the client_id, which is not the API audience). Layered on top, the middleware positively rejects an ID token even when its audience matches: it rejects `token_use == "id"` (Cognito) and any token carrying an OIDC-Core ID-token-only claim (`nonce`, `at_hash`, or `c_hash`), none of which appear in an access token. A fork whose IdP needs still stricter checking (for example requiring the RFC 9068 `typ: at+jwt` header) should add it in the middleware.
 
@@ -245,23 +245,23 @@ Authorisation is **attribute-based access control** (ABAC) evaluated by OPA. Acc
 
 **Auditability caveat.** ABAC is harder to audit than RBAC: because access depends on runtime attribute values, the question "who can access X" often has no static answer (again the [NIST ABAC guide](https://csrc.nist.gov/pubs/sp/800/162/upd2/final)). OPA reduces, but does not eliminate, this gap with policy tests (`opa test`), rule coverage (`opa test --coverage`), and [decision logs](https://www.openpolicyagent.org/docs/latest/management-decision-logs/) that record every decision with its inputs. Turn decision logs on in production so each cross-user grant is reviewable after the fact.
 
-**The non-negotiable rule.** Every authorisation attribute (the caller's subject, roles, and any boundary attribute such as team) comes from the **validated token or a trusted store keyed by the token subject**, never from request input. The target user **may** be request-supplied because it only names *which* object, but the caller's right to act on it is decided by OPA, never asserted by supplying it. This is [OWASP API1:2023 Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/): the check must validate that the caller may act on the specific object, from a trusted source.
+**The non-negotiable rule.** Every authorisation attribute (the caller's subject, roles, and any boundary attribute such as team) comes from the **validated token or a trusted store keyed by the token subject**, never from request input. The target user **may** be request-supplied because it only names _which_ object, but the caller's right to act on it is decided by OPA, never asserted by supplying it. This is [OWASP API1:2023 Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/): the check must validate that the caller may act on the specific object, from a trusted source.
 
 ### Configuration
 
-| Variable            | Layer | Default                     | Meaning                                                              |
-| ------------------- | ----- | --------------------------- | ------------------------------------------------------------------- |
-| `OIDC_ISSUER_URL`   | authn | unset (authn off)           | OIDC issuer / discovery base. Setting it enables authentication.    |
-| `OIDC_AUDIENCE`     | authn | unset                       | This API's own audience identifier (the `aud` your IdP puts in access tokens), **not** a browser client_id. Required when auth is enabled. |
-| `OIDC_ENABLED`      | authn | derived from issuer set     | Explicit on/off override.                                           |
-| `OPA_URL`           | authz | unset (authz off)           | OPA sidecar base URL. Setting it enables authorisation.             |
-| `OPA_DECISION_PATH` | authz | `v1/data/api/authz/allow`   | REST Data API path to the boolean allow decision.                   |
-| `OPA_TIMEOUT_MS`    | authz | `100`                       | OPA call timeout in ms. Bounded to `(0, 60000]`. Fails closed fast. |
-| `OPA_ENABLED`       | authz | derived from URL set        | Explicit on/off override.                                           |
+| Variable            | Layer | Default                   | Meaning                                                                                                                                    |
+| ------------------- | ----- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OIDC_ISSUER_URL`   | authn | unset (authn off)         | OIDC issuer / discovery base. Setting it enables authentication.                                                                           |
+| `OIDC_AUDIENCE`     | authn | unset                     | This API's own audience identifier (the `aud` your IdP puts in access tokens), **not** a browser client_id. Required when auth is enabled. |
+| `OIDC_ENABLED`      | authn | derived from issuer set   | Explicit on/off override.                                                                                                                  |
+| `OPA_URL`           | authz | unset (authz off)         | OPA sidecar base URL. Setting it enables authorisation.                                                                                    |
+| `OPA_DECISION_PATH` | authz | `v1/data/api/authz/allow` | REST Data API path to the boolean allow decision.                                                                                          |
+| `OPA_TIMEOUT_MS`    | authz | `100`                     | OPA call timeout in ms. Bounded to `(0, 60000]`. Fails closed fast.                                                                        |
+| `OPA_ENABLED`       | authz | derived from URL set      | Explicit on/off override.                                                                                                                  |
 
 The contract seam is unchanged: auth middleware stores the internal UUID via `shared.WithUserID(ctx, id)`, and handlers read it via `shared.UserIDFromContext(ctx)`. The key lives in `internal/shared` so infrastructure middleware never imports a feature package. To swap in your own auth, replace the middleware wired at the `r.Route("/api/v1", …)` block in `cmd/api/main.go`.
 
-> **Browser forks: do not store tokens in `localStorage`.** It is readable by any script on the page, so an XSS turns into token theft. Prefer a same-site, `HttpOnly` cookie set by a backend-for-frontend, or in-memory storage. That backend-for-frontend is a separate backend that sits in front of this API and holds the tokens itself. It is not this API, so a frontend must not assume this service holds its tokens. See the [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage). This is a client concern. The resource server takes no position beyond this note.
+> **Browser forks: do not store tokens in `localStorage`.** It is readable by any script on the page, so an XSS turns into token theft. Prefer a same-site, `HttpOnly` cookie set by a backend-for-frontend, or in-memory storage. That backend-for-frontend is a separate backend that sits in front of this API and holds the tokens itself. It is not this API, so a frontend must not assume this service holds its tokens. The paired [svelte-ui-template](https://github.com/sud0x0/svelte-ui-template) is one such BFF, with an optional Valkey session store (standardise on one Valkey across the pair — see [Scaling](#the-valkey-pattern-concrete-recipe)). See the [OWASP HTML5 Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTML5_Security_Cheat_Sheet.html#local-storage). This is a client concern. The resource server takes no position beyond this note.
 
 ### What is out of scope
 
@@ -302,13 +302,13 @@ err := database.WithTransaction(ctx, func(tx pgx.Tx) error {
 
 ### Which to use
 
-|                          | **Cursor (keyset)**, recommended                 | **Offset**, legacy / shallow                                 |
-| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------ |
-| Query                    | `?cursor=` (first page), then echo `next_cursor` | `?limit&offset`                                              |
-| Response                 | `{"logs":[…],"next_cursor":"…"}`                 | bare array `[…]`                                             |
-| Cost                     | constant per page (index seek)                   | grows with depth (walk-and-discard)                          |
-| Under concurrent inserts | stable, no shifted/duplicated rows               | pages shift, rows can repeat or be skipped                   |
-| Depth                    | unbounded                                        | **hard cap at `offset` 10000**, deeper rows are unreachable  |
+|                          | **Cursor (keyset)**, recommended                 | **Offset**, legacy / shallow                                |
+| ------------------------ | ------------------------------------------------ | ----------------------------------------------------------- |
+| Query                    | `?cursor=` (first page), then echo `next_cursor` | `?limit&offset`                                             |
+| Response                 | `{"logs":[…],"next_cursor":"…"}`                 | bare array `[…]`                                            |
+| Cost                     | constant per page (index seek)                   | grows with depth (walk-and-discard)                         |
+| Under concurrent inserts | stable, no shifted/duplicated rows               | pages shift, rows can repeat or be skipped                  |
+| Depth                    | unbounded                                        | **hard cap at `offset` 10000**, deeper rows are unreachable |
 
 **Use cursor pagination for anything that can exceed a few thousand rows or is read while being written.** Offset stays for shallow human browsing (jump to page N) and backwards compatibility, but its `10000` cap is a hard reachability limit, not a soft default. Past it, switch to cursor.
 
@@ -350,11 +350,11 @@ DB_HOST=… DB_USER=… DB_PASSWORD=… DB_NAME=… ./go-api
 
 Subcommands:
 
-| Command                                   | Effect                      |
-| ----------------------------------------- | --------------------------- |
-| `up` / `up-by-one` / `up-to <v>`          | Apply migrations            |
-| `down` / `down-to <v>` / `redo` / `reset` | Roll back, **destructive**  |
-| `status` / `db-version`                   | Read schema state           |
+| Command                                   | Effect                     |
+| ----------------------------------------- | -------------------------- |
+| `up` / `up-by-one` / `up-to <v>`          | Apply migrations           |
+| `down` / `down-to <v>` / `redo` / `reset` | Roll back, **destructive** |
+| `status` / `db-version`                   | Read schema state          |
 
 Destructive commands require BOTH gates:
 
@@ -456,16 +456,16 @@ Every line is JSON to stdout (no log files, no rotation in the app, the orchestr
 }
 ```
 
-| Field                                | Source                                                                                                                 | When present                                                                  |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `time`                               | slog default, formatted RFC3339                                                                                        | every line                                                                    |
-| `level`, `msg`                       | slog default                                                                                                           | every line                                                                    |
+| Field                                | Source                                                                                                                    | When present                                                                  |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `time`                               | slog default, formatted RFC3339                                                                                           | every line                                                                    |
+| `level`, `msg`                       | slog default                                                                                                              | every line                                                                    |
 | `service`, `version`, `commit`       | `NewLogger(level, serviceName)`, bound once via `WithAttrs`, and version/commit come from `internal/version` (`-ldflags`) | every line                                                                    |
-| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                    | every line emitted during an HTTP request                                     |
-| `trace_id`, `span_id`                | `RequestLogger` reads the active OTel span from the request context                                                    | every line during a request with a valid span (omitted when telemetry is off) |
-| `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                   | every line emitted _after_ auth fires                                         |
-| `error`, `actual_error`              | only on `LogError`                                                                                                     | error lines                                                                   |
-| `status`, `duration_ms`              | only on the "request completed" line                                                                                   | end-of-request lines                                                          |
+| `request_id`, `method`, `path`, `ip` | `RequestLogger` middleware via `WithRequestContext`                                                                       | every line emitted during an HTTP request                                     |
+| `trace_id`, `span_id`                | `RequestLogger` reads the active OTel span from the request context                                                       | every line during a request with a valid span (omitted when telemetry is off) |
+| `user_id`                            | re-bound by an auth middleware (recommended pattern)                                                                      | every line emitted _after_ auth fires                                         |
+| `error`, `actual_error`              | only on `LogError`                                                                                                        | error lines                                                                   |
+| `status`, `duration_ms`              | only on the "request completed" line                                                                                      | end-of-request lines                                                          |
 
 **One log line is enough to identify the request, the route, the client, and (after auth) the user.** A handler that returns an internal error logs:
 
@@ -556,7 +556,7 @@ This template expects these controls to live **outside the application**, not in
 
 The app ships an **opt-in fallback limiter** (`RATE_LIMIT_RPM`, default `0` = disabled, keyed by client IP) for deployments that genuinely have no edge limiter. Two caveats make it a fallback, not a replacement:
 
-- **Per-instance counters.** `httprate` counts in memory per process, so with `N` replicas the effective global limit is `RATE_LIMIT_RPM × N`. A true global limit belongs at the edge.
+- **Per-instance counters.** `httprate` counts in memory per process, so with `N` replicas the effective global limit is `RATE_LIMIT_RPM × N`. A true global limit belongs at the edge. If you genuinely need an app-level **global** limit, back `httprate` with a shared store (a [`go-chi/httprate`](https://github.com/go-chi/httprate) Redis/Valkey store) so the counter is shared across replicas instead of per-process. This is an optional add-on, not a replacement: the edge stays the primary control (see `.claude/rules/decisions.md` #4), and the shared store adds a Valkey dependency plus a per-request round-trip. See the [Valkey pattern](#the-valkey-pattern-concrete-recipe).
 - **IP keying needs trusted proxy headers.** If the app is behind a proxy but `TRUST_PROXY_HEADERS=false`, every request carries the proxy's IP, so all traffic shares one bucket and the limiter self-DoSes the API. The app logs a startup warning when `RATE_LIMIT_RPM > 0` while `TRUST_PROXY_HEADERS=false`.
 
 The limiter applies only to business routes (`/api/v1/*` and any future routes added to that group). The health endpoints (`/livez`, `/readyz`, `/health`) are exempt so probes are never throttled into a restart loop. When the limiter fires it returns `429` with the standard JSON error envelope (`{"error":"rate_limited",…}`). In edge-limited deployments the `429` may instead come from the upstream gateway, whose body shape is its own.
@@ -597,41 +597,52 @@ If you have **async work** (sending emails, processing webhooks, retrying failed
 
 The 12-factor answer: a second process type. Add a `cmd/worker/main.go` that runs alongside the API, shares `internal/config`, ships through the same GoReleaser pipeline, and consumes jobs from a queue.
 
-### The Redis pattern (concrete recipe)
+### The Valkey pattern (concrete recipe)
 
-Most teams reach for Redis here. The wiring is straightforward and follows the same patterns this template uses everywhere else.
+Most teams reach for Redis here. Use [Valkey](https://valkey.io/) (the BSD-3-licensed fork of Redis; recent Redis releases moved off an open-source licence). It speaks the same RESP wire protocol (the Redis protocol), so the de-facto Go clients work against it **unchanged**: [`hibiken/asynq`](https://github.com/hibiken/asynq) for jobs, [`redis/go-redis/v9`](https://github.com/redis/go-redis) for cache, pub/sub, and streams. The wiring follows the same patterns this template uses everywhere else.
 
-#### 1. Add Redis to config
+> **This is a recipe, not shipped code.** The template ships **no** Valkey client and no `internal/cache` or `cmd/worker` — it stays stateless by design (see the top of [Scaling](#scaling)). The snippets below are illustrative. Add the client, and these files, only in your fork, and only when you add a worker or a shared cache.
 
-Extend `internal/config/config.go` the way you'd add any other backing service:
+The paired [svelte-ui-template](https://github.com/sud0x0/svelte-ui-template) BFF ships an optional Valkey **session** store, so standardise on one Valkey deployment across the pair (this API's optional worker/cache and the BFF's sessions). One store to run, secure, and monitor.
+
+#### 1. Add Valkey to config
+
+Extend `internal/config/config.go` the way you'd add any other backing service. The single-env-read rule still holds: no `os.Getenv` outside `internal/config`.
 
 ```go
 type Config struct {
     // … existing fields
-    Redis RedisConfig
+    Valkey ValkeyConfig
 }
 
-type RedisConfig struct {
-    URL      string
+type ValkeyConfig struct {
+    URL      string // VALKEY_URL: a redis:// or rediss:// URL (go-redis and asynq accept both)
     PoolSize int
 }
 
 // In Load():
-Redis: RedisConfig{
-    URL:      getEnv("REDIS_URL", ""),
-    PoolSize: redisPoolSize,  // from getEnvInt("REDIS_POOL_SIZE", 10)
+Valkey: ValkeyConfig{
+    URL:      getEnv("VALKEY_URL", ""),
+    PoolSize: valkeyPoolSize,  // from getEnvInt("VALKEY_POOL_SIZE", 10)
 }
 ```
 
-Add `REDIS_URL` + `REDIS_POOL_SIZE` to `.env.example`. No `os.Getenv` outside `internal/config`.
+Add `VALKEY_URL` + `VALKEY_POOL_SIZE` to your fork's `.env.example`. The name matches the BFF's `BFF_VALKEY_URL`, so one Valkey serves both repos.
+
+Security, mirroring the [`DB_SSLMODE`](#connection-security-db_sslmode) stance (encrypt in transit; the default is for a trusted network, harden for production):
+
+- Use `rediss://` (TLS) whenever the connection crosses an untrusted network. `redis://` (plaintext) is fine only on loopback or a private network.
+- `VALKEY_URL` carries the password, so it is a secret: pass it via env or a secret manager, never commit it (gitleaks already scans for leaked secrets).
+- Anything you cache or enqueue in Valkey inherits the app's data sensitivity. Do not put tokens or unencrypted PII in a shared store without the same care the API applies elsewhere (see the [Coding rules](#coding-rules) and `.claude/rules/security.md`).
 
 #### 2. Pick a queue library
 
-| Need                                                     | Use                                                                                                       |
-| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Job queue with retries, scheduled, priority, idempotency | [`hibiken/asynq`](https://github.com/hibiken/asynq) (Redis-backed, production-ready, ships with a web UI) |
-| Lightweight pub/sub or streams                           | [`redis/go-redis/v9`](https://github.com/redis/go-redis) directly with Redis Streams                      |
-| Distributed cache / rate limiting                        | `redis/go-redis/v9`, no queue layer needed                                                                |
+| Need                                                     | Use                                                                                                                                                                                                                   |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Job queue with retries, scheduled, priority, idempotency | [`hibiken/asynq`](https://github.com/hibiken/asynq) — RESP-backed so it runs on Valkey unchanged; production-ready, ships with a web UI                                                                               |
+| Lightweight pub/sub or streams                           | [`redis/go-redis/v9`](https://github.com/redis/go-redis) directly (Valkey/Redis streams)                                                                                                                              |
+| Distributed cache                                        | `redis/go-redis/v9`, no queue layer needed                                                                                                                                                                            |
+| A global app-level rate limit                            | back `httprate` with a shared store (a [`go-chi/httprate`](https://github.com/go-chi/httprate) Redis/Valkey store) so the counter is shared across replicas (see [Deployment requirements](#deployment-requirements)) |
 
 This template doesn't include any of them by default. Add what you actually need.
 
@@ -657,17 +668,17 @@ The queue client is injected into the handler the same way `HandlerMetrics` is, 
 #### 4. Add the worker binary
 
 ```
-cmd/worker/main.go      # consumes jobs from Redis
+cmd/worker/main.go      # consumes jobs from Valkey
 internal/jobs/          # job handler functions, following the userlog layered pattern
 ```
 
 `cmd/worker/main.go` mirrors `cmd/api/main.go`:
 
-- Load config (same `config.Load()`, already reads `REDIS_URL`).
+- Load config (same `config.Load()`, already reads `VALKEY_URL`).
 - Create the logger (`logger.NewLogger(cfg.Log.Level, "go-api-worker")`, note the distinct service name).
 - Open the DB pool (same `db.New(...)`).
 - Initialise telemetry and metrics (same `observability.Init(...)` then `metrics.New()`).
-- Start an asynq.Server (or a Redis Streams consumer loop).
+- Start an asynq.Server (or a Valkey/Redis streams consumer loop).
 - Bind `/livez` + `/readyz` on `:METRICS_PORT` so k8s can probe it.
 - Graceful shutdown on SIGINT/SIGTERM: drain in-flight jobs before exiting.
 
@@ -697,16 +708,17 @@ GoReleaser produces all three binaries on the same release tag. Deploy them toge
 
 ### Cache use cases (not queues)
 
-If you need Redis for caching (session data, rate-limit counters, computed responses) rather than a queue:
+If you need Valkey for caching (rate-limit counters, computed responses) rather than a queue:
 
 - Use `redis/go-redis/v9` directly, no queue layer needed.
-- Wrap Get/Set/Del in a `internal/cache/` package so feature code doesn't know it's Redis.
+- Wrap Get/Set/Del in an `internal/cache/` package so feature code doesn't know it's Valkey.
 - **Do not** cache in process memory (`sync.Map`, package-level maps). That breaks the stateless-process rule and your cache is per-instance, useless for sharing rate limits.
-- Set explicit TTLs on every key. Unbounded caches grow until Redis OOMs.
+- Set explicit TTLs on every key. Unbounded caches grow until Valkey runs out of memory.
+- A shared cache inherits the app's data sensitivity: do not store tokens or unencrypted PII there without the same care the API applies elsewhere (see [Coding rules](#coding-rules)).
 
-### What to delete from the template if you don't need Redis
+### What to delete from the template if you don't need Valkey
 
-Most APIs do not need a worker process to start. Don't add Redis pre-emptively. The right time to add it is the first time you write code that thinks "this should happen later" or "this should retry". Until then, the API + migrator combination is the right shape.
+Most APIs do not need a worker process to start. Don't add Valkey pre-emptively. The right time to add it is the first time you write code that thinks "this should happen later" or "this should retry". Until then, the API + migrator combination is the right shape.
 
 ---
 
@@ -759,12 +771,12 @@ slsa-verifier verify-artifact <binary> \
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request + push to `main`:
 
-| Job                 | Catches                                                                                                                             |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Job                 | Catches                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `pre-commit`        | Hooks bypassed locally with `--no-verify`, mandatory here. Pinned tool versions (golangci-lint, govulncheck, semgrep, pre-commit). |
-| `test`              | `go build`, `go vet`, `go test -race`                                                                                               |
-| `test-integration`  | Postgres 16 service container, `go run ./cmd/migrate up`, then `go test -race -tags integration ./...`                              |
-| `goreleaser-config` | `goreleaser check` + `extract-changelog.sh` fixture tests: broken release config or script is caught on PR, not at tag time         |
+| `test`              | `go build`, `go vet`, `go test -race`                                                                                              |
+| `test-integration`  | Postgres 16 service container, `go run ./cmd/migrate up`, then `go test -race -tags integration ./...`                             |
+| `goreleaser-config` | `goreleaser check` + `extract-changelog.sh` fixture tests: broken release config or script is caught on PR, not at tag time        |
 
 ### Pre-commit hooks (run locally + in CI)
 
@@ -820,17 +832,17 @@ This is a **request, not an enforced gate**. No hook or CI job rejects other for
 
 ### Tests + lint
 
-| Command                               | Description                                                                               |
-| ------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `make ci`                             | Umbrella gate (no podman): `go build` + `go vet` + `golangci-lint` + race unit tests      |
-| `make verify`                         | Full pre-commit gate (podman): `ci` + integration tests                                   |
+| Command                               | Description                                                                              |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `make ci`                             | Umbrella gate (no podman): `go build` + `go vet` + `golangci-lint` + race unit tests     |
+| `make verify`                         | Full pre-commit gate (podman): `ci` + integration tests                                  |
 | `make test-unit`                      | Race-enabled unit tests (pgxmock, no real DB needed). `make test` is a deprecated alias. |
-| `make test-pretty`                    | Table-formatted output over the same `-race` unit suite                                   |
-| `make test-integration`               | Real-Postgres integration tests (requires `make run`)                                     |
-| `make test-scripts`                   | Shell-script Go tests (extract-changelog fixture)                                         |
-| `make lint` / `make fmt` / `make vet` | golangci-lint / gofmt / go vet                                                            |
-| `make vulncheck` / `make semgrep`     | govulncheck / semgrep                                                                     |
-| `make pre-commit-run`                 | Run every hook against every file                                                         |
+| `make test-pretty`                    | Table-formatted output over the same `-race` unit suite                                  |
+| `make test-integration`               | Real-Postgres integration tests (requires `make run`)                                    |
+| `make test-scripts`                   | Shell-script Go tests (extract-changelog fixture)                                        |
+| `make lint` / `make fmt` / `make vet` | golangci-lint / gofmt / go vet                                                           |
+| `make vulncheck` / `make semgrep`     | govulncheck / semgrep                                                                    |
+| `make pre-commit-run`                 | Run every hook against every file                                                        |
 
 ### Release
 
