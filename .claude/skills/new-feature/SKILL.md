@@ -62,7 +62,20 @@ Then review each file by hand. Sed handles the bulk but leaves these edge cases:
 - **`<feature>_handler.go`**: keep the flow: UUID parse → struct validate → service call → `responseJSON`. Every error path through `handleError`. Every metric label from constants.
 - **`<feature>_test.go`**: update test data and assertions. Keep the `assertErrorRecorded` calls in every error-path subtest so the bounded-label discipline (rule 7) is enforced.
 
-**Cross-user access (only if your feature needs it).** If a feature must let a privileged caller act on ANOTHER user's rows, follow the `userlog` reference pattern exactly (`decisions.md` #21), do not invent a new mechanism:
+**OPA policy — REQUIRED when OPA is enabled (or your feature 403s on its own data).** The starter policy [`deploy/opa/policy.rego`](../../../deploy/opa/policy.rego) is **default-deny** and its resource gate (`is_logs`) is anchored to the `/api/v1/logs` routes ONLY. A newly scaffolded feature's routes (e.g. `/api/v1/<features>`) match NO rule, so with OPA enabled EVERY request to them is denied `403` — including a user reading their OWN rows. Extend the policy for the new feature, mirroring the `logs` rules:
+
+- Add a resource gate for the feature's routes, anchored exactly like `is_logs` (exact collection path OR the `/api/v1/<features>/` sub-path prefix — never a bare `startswith`, so a sibling route can't inherit it):
+
+  ```rego
+  is_<features> if input.resource == "/api/v1/<features>"
+  is_<features> if startswith(input.resource, "/api/v1/<features>/")
+  ```
+- Add a **self-access** rule so an authenticated caller may act on their own rows (mirror the logs self-access rule: `is_<features>`, `input.action in log_actions`, `input.subject != ""`, `input.target_user == input.subject`). Reuse the shared `log_actions` set (the four fixed verbs); do not invent new action names.
+- Add matching cases to [`deploy/opa/policy_test.rego`](../../../deploy/opa/policy_test.rego): self-access allowed, an adjacent route denied (the anchoring tripwire), and default-deny for an unrelated resource. Run `opa test deploy/opa/`.
+
+Skipping this is the most common new-feature footgun: unit/integration tests pass (they don't run OPA), then the feature 403s the moment OPA is turned on in a real deployment.
+
+**Cross-user access (only if your feature needs it).** If a feature must ALSO let a privileged caller act on ANOTHER user's rows, follow the `userlog` reference pattern exactly (`decisions.md` #21), do not invent a new mechanism:
 
 - The OPA middleware already authorises `{subject, roles, action, resource, method, target_user}` in the four fixed verbs (`read`/`create`/`update`/`delete`) and writes the authorised `target_user` to the context after an explicit allow. Do not add new action names.
 - Add a **target-aware repository method** (`getXForTarget`, `updateXForTarget`, …) that runs the SAME query scoped to the **target's** `user_id`. Never add an unscoped query that omits `user_id`: cross-user still enforces object ownership at the data layer.

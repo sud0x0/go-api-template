@@ -65,6 +65,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error creating pipe: %v\n", err)
 		os.Exit(1)
 	}
+	// Forward the child's stderr instead of discarding it (cmd.Stderr == nil sends
+	// it to /dev/null). Some go-test diagnostics land here rather than in the JSON
+	// stream, and silently dropping them is exactly how a broken tree looked green.
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting tests: %v\n", err)
@@ -72,7 +76,14 @@ func main() {
 	}
 
 	results := make(map[string]*TestResult)
+	// Package-level output carries COMPILE/BUILD errors: `go test -json` reports a
+	// package that fails to build as package-level "output" lines plus a package
+	// "fail", never as per-test events. Capturing them means a broken build is
+	// surfaced (and made fatal) instead of printing "0 failed" and exiting 0.
+	var pkgOutput []string
+	pkgFailed := false
 	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 16*1024*1024) // long compile-error lines
 
 	for scanner.Scan() {
 		var event TestEvent
@@ -80,6 +91,12 @@ func main() {
 			continue
 		}
 		if event.Test == "" {
+			switch event.Action {
+			case "output":
+				pkgOutput = append(pkgOutput, event.Output)
+			case "fail":
+				pkgFailed = true
+			}
 			continue
 		}
 		key := event.Package + "/" + event.Test
@@ -104,7 +121,11 @@ func main() {
 		}
 	}
 
-	cmd.Wait()
+	// The Wait() error is the process's real verdict: it is non-zero on a build
+	// failure or any package-level failure even when no per-test "fail" event was
+	// emitted. Ignoring it (as this runner used to) is what let a broken build
+	// pass. Capture it and factor it into the exit decision below.
+	waitErr := cmd.Wait()
 
 	var sortedResults []*TestResult
 	for _, r := range results {
@@ -174,7 +195,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to save JSON results: %v\n", err)
 	}
 
-	if failed > 0 {
+	// Exit decision. A build failure produces NO per-test events, so keying only
+	// on `failed` (as this runner used to) printed "0 failed" and exited 0 on a
+	// tree that does not compile. Treat a non-zero `go test` exit, a package-level
+	// failure, or a run that produced zero test events as failure too.
+	buildBroke := waitErr != nil || pkgFailed
+	noTestsRan := len(sortedResults) == 0
+	if failed > 0 || buildBroke || noTestsRan {
+		if len(pkgOutput) > 0 && (buildBroke || noTestsRan) {
+			fmt.Fprintf(os.Stderr, "\n%s%sgo test build/package output:%s\n", colourBold, colourRed, colourReset)
+			for _, line := range pkgOutput {
+				fmt.Fprint(os.Stderr, line)
+			}
+		}
+		switch {
+		case failed > 0:
+			// The table above already lists the failing tests.
+		case noTestsRan && !buildBroke:
+			fmt.Fprintf(os.Stderr, "%s%sno tests ran — nothing was verified%s\n", colourBold, colourRed, colourReset)
+		default:
+			fmt.Fprintf(os.Stderr, "%s%sgo test failed (build error or package-level failure): %v%s\n", colourBold, colourRed, waitErr, colourReset)
+		}
 		os.Exit(1)
 	}
 }

@@ -118,6 +118,44 @@ func decodeEnvelope(t *testing.T, body []byte) shared.ErrorResponse {
 	return env
 }
 
+// TestOIDCAuth_BindsUserIDToRequestLogger verifies fix #9: after a valid token
+// authenticates a request, the request-scoped logger is enriched with user_id,
+// so every subsequent log line for that authenticated request carries it. The
+// chain mirrors production order: RequestLogger installs the mutable holder, then
+// the auth middleware calls BindUserID.
+func TestOIDCAuth_BindsUserIDToRequestLogger(t *testing.T) {
+	s := newTestSigner(t)
+	auth := testAuthenticator(verifierFor(s.priv.Public()))
+	cap := &captureLogger{}
+
+	// RequestLogger (outer) → auth.Handler → terminal handler.
+	handler := RequestLogger(cap)(auth.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/logs", nil)
+	req.Header.Set("Authorization", "Bearer "+s.sign(t, validClaims("auth0|12345")))
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("authenticated request: got %d, want 200 (body=%q)", rr.Code, rr.Body.String())
+	}
+
+	wantUID := MapSubjectToUUID(testIssuer, "auth0|12345")
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	found := false
+	for _, rc := range cap.boundCalls {
+		if rc.UserID == wantUID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no bound RequestContext carried user_id=%q; binds were: %+v", wantUID, cap.boundCalls)
+	}
+}
+
 func TestOIDCAuth_ValidToken_SetsMappedUUID(t *testing.T) {
 	s := newTestSigner(t)
 	auth := testAuthenticator(verifierFor(s.priv.Public()))

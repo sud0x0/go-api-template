@@ -30,6 +30,38 @@ func TestHealthCache_CachesWithinTTL(t *testing.T) {
 	}
 }
 
+// TestHealthCache_SlowCheckStillServesFromCache proves the TTL is anchored to
+// when the check COMPLETES, not when Check() was entered. When the check runs
+// longer than the TTL (the real case: a 3s DB ping vs a 2s readiness TTL),
+// anchoring to the pre-check time wrote an already-expired entry — the result
+// was NEVER served from cache and a /readyz flood serialised into back-to-back
+// full pings. Here the second call, issued immediately after the first returns,
+// must be served from cache (the check runs exactly once).
+func TestHealthCache_SlowCheckStillServesFromCache(t *testing.T) {
+	now := time.Unix(0, 0)
+	var calls atomic.Int64
+	ttl := 2 * time.Second
+	c := NewHealthCache(func(context.Context) error {
+		calls.Add(1)
+		now = now.Add(3 * time.Second) // the check takes LONGER than the TTL
+		return nil
+	}, ttl)
+	c.now = func() time.Time { return now }
+
+	if err := c.Check(context.Background()); err != nil {
+		t.Fatalf("first Check: %v", err)
+	}
+	// No manual clock advance between calls: the second call lands within the TTL
+	// of the check's COMPLETION time. With the pre-check anchoring bug it would
+	// already be expired and re-run the check.
+	if err := c.Check(context.Background()); err != nil {
+		t.Fatalf("second Check: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("check ran %d times; want 1 (second call must be served from cache)", got)
+	}
+}
+
 // TestHealthCache_RefreshesAfterTTL verifies the check re-runs once the TTL has
 // elapsed, and that a newly-failing backend is reflected.
 func TestHealthCache_RefreshesAfterTTL(t *testing.T) {

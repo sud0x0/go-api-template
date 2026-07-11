@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   # Pre-commit runs locally but is skippable via `git commit --no-verify`.
-  # This job makes every configured hook mandatory on the server side.
+  # This job re-runs the configured hooks on the server side so they cannot be
+  # bypassed locally. CAVEAT: the gitleaks hook runs `gitleaks git --staged`,
+  # which in a fresh actions/checkout (index == HEAD) scans an EMPTY staged diff
+  # and so cannot catch a secret already committed in history. Full-history secret
+  # scanning is therefore done by the dedicated `gitleaks` job below, not here.
   pre-commit:
     runs-on: ubuntu-latest
     steps:
@@ -55,6 +59,34 @@ jobs:
 
       - name: Run pre-commit
         run: pre-commit run --all-files --show-diff-on-failure
+
+  # Full-history secret scan. The pre-commit gitleaks hook runs
+  # `gitleaks git --staged`, which in a fresh checkout scans an empty staged diff
+  # and passes on any secret ALREADY committed in history. This job scans the
+  # entire history with `gitleaks detect` so a committed credential fails CI.
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0  # full history so `gitleaks detect` scans every commit
+
+      # Pin gitleaks to the same version as the pre-commit hook
+      # (.pre-commit-config.yaml). Download the release tarball to disk before
+      # extracting — never pipe a remote payload straight into a shell.
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          tarball="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o "$tarball"
+          tar -xzf "$tarball" -C "${RUNNER_TEMP}" gitleaks
+          sudo install "${RUNNER_TEMP}/gitleaks" /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full history for secrets
+        run: gitleaks detect --redact --no-banner
 
   test:
     runs-on: ubuntu-latest

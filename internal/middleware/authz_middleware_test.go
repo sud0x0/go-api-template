@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +49,52 @@ func allowCountingNext(allowed *bool) http.Handler {
 		*allowed = true
 		w.WriteHeader(http.StatusOK)
 	})
+}
+
+// TestOPAAuth_ReusesConnection proves the decision body is drained so the OPA
+// connection is returned to the keep-alive pool: two sequential decisions must
+// reuse ONE TCP connection, not dial a fresh one each time. Without the drain
+// (json.Decoder stops at the end of the JSON value and leaves the rest unread),
+// the Transport can't reuse the connection and each authorized request re-dials
+// the sidecar on the hot path.
+//
+// The stub appends >2KB of trailing bytes after the decision object. Go's
+// Transport auto-slurps only a small remainder (~2KB) on Close, so this models
+// the real chunked-encoding case where the decoder leaves the chunk terminator
+// unread: only the explicit io.Copy(io.Discard) drain reaches EOF and preserves
+// keep-alive. With a tiny body the auto-slurp would hide the bug.
+func TestOPAAuth_ReusesConnection(t *testing.T) {
+	var mu sync.Mutex
+	newConns := 0
+	trailing := strings.Repeat(" ", 4096) // exceeds the Transport's on-Close auto-slurp limit
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"result": true}`+trailing)
+	}))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			mu.Lock()
+			newConns++
+			mu.Unlock()
+		}
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	authz := opaAuthorizerFor(srv.URL, time.Second)
+	input := opaInput{Subject: "11111111-1111-1111-1111-111111111111", Action: "read", Resource: "/api/v1/logs"}
+	for range 2 {
+		allowed, err := authz.decide(context.Background(), input)
+		if err != nil || !allowed {
+			t.Fatalf("decide: allowed=%v err=%v", allowed, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if newConns != 1 {
+		t.Errorf("opened %d new connections for 2 sequential decisions; want 1 (body not drained → keep-alive broken)", newConns)
+	}
 }
 
 func TestOPAAuth_AllowsOnlyOnExplicitTrue(t *testing.T) {

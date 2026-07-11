@@ -105,11 +105,15 @@ destroy:
 
 # Delete all temp, build, test, and release artifacts. `dist/` is the
 # GoReleaser snapshot/release output — also covered by .gitignore.
+#
+# Does NOT touch .env: it holds the developer's local secrets/config (created by
+# `make setup`), is not a build artifact, and deleting it on `make clean` would
+# silently destroy their working configuration.
 clean:
 	@echo "Cleaning temp, build, test, and release artifacts..."
 	@rm -rf _tmp_/ tmp/ bin/ _BUILD_/ _test_results_/ dist/
 	@rm -rf .golangci-lint-cache/
-	@rm -f *.out *.coverprofile *.test .env
+	@rm -f *.out *.coverprofile *.test
 	@echo "Clean complete."
 
 # ============================================================================
@@ -282,7 +286,11 @@ test-pretty:
 # packages that expect the schema to exist (e.g. userlog's CRUD tests).
 test-integration:
 	@echo "Running integration tests (requires running database)..."
-	@go test -p 1 -tags integration ./...
+	@# Pipe -json through the gate so an all-SKIPPED run (no DB/OPA stack env) fails
+	@# LOUDLY instead of exiting 0 and letting `verify` claim success having run
+	@# zero assertions. pipefail (bash) makes a build error / test failure in the
+	@# left side fail the pipeline too. The gate is the single verdict on stdout.
+	@bash -c 'set -o pipefail; go test -p 1 -tags integration -json ./... | go run tests/integration_gate.go'
 
 # The repo's shell-script Go tests (the extract-changelog fixture) — the exact
 # subset the goreleaser-config CI job runs. NO PODMAN.
@@ -308,10 +316,16 @@ ci:
 # Umbrella 2 — verify (PODMAN REQUIRED). The full pre-commit gate: ci plus the
 # real-Postgres integration tests. Run `make run` first (or point at a reachable
 # dev database). Composes ci + test-integration — no command string duplicated.
+#
+# The checkmark below is HONEST: test-integration pipes through tests/
+# integration_gate.go, which fails the target when zero integration tests ran
+# (all t.Skip()ped because the DB/OPA stack env is absent). So this line prints
+# only after integration tests actually executed — `make verify` can no longer
+# claim success having verified nothing.
 verify:
 	@$(MAKE) --no-print-directory ci test-integration
 	@echo ""
-	@echo "✓ verify passed (ci + integration tests)."
+	@echo "✓ verify passed (ci + integration tests actually ran)."
 
 # ============================================================================
 # Code quality

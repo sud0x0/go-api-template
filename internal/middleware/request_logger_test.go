@@ -18,7 +18,8 @@ import (
 type captureLogger struct {
 	mu          sync.Mutex
 	infoCalls   []infoCall
-	boundCtx    logger.RequestContext
+	boundCtx    logger.RequestContext   // the LAST WithRequestContext call
+	boundCalls  []logger.RequestContext // EVERY WithRequestContext call, in order
 	boundCalled bool
 }
 
@@ -39,6 +40,7 @@ func (c *captureLogger) WithRequestContext(rc logger.RequestContext) logger.Logg
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.boundCtx = rc
+	c.boundCalls = append(c.boundCalls, rc)
 	c.boundCalled = true
 	return c
 }

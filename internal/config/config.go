@@ -286,22 +286,33 @@ func LoadMigrator() (*MigratorConfig, error) {
 		AllowDestructive: getEnv("MIGRATOR_ALLOW_DESTRUCTIVE", ""),
 	}
 	if !isPostgresDuration(cfg.LockTimeout) {
-		return nil, fmt.Errorf("MIGRATOR_LOCK_TIMEOUT %q is not a valid Postgres duration (e.g. 5s, 100ms, 1min, 2h)", cfg.LockTimeout)
+		return nil, fmt.Errorf("MIGRATOR_LOCK_TIMEOUT %q must be a positive Postgres duration with an explicit unit (e.g. 5s, 100ms, 1min, 2h); a bare integer or 0 is rejected (0 disables the timeout)", cfg.LockTimeout)
 	}
 	if !isPostgresDuration(cfg.StatementTimeout) {
-		return nil, fmt.Errorf("MIGRATOR_STATEMENT_TIMEOUT %q is not a valid Postgres duration (e.g. 5s, 100ms, 1min, 2h)", cfg.StatementTimeout)
+		return nil, fmt.Errorf("MIGRATOR_STATEMENT_TIMEOUT %q must be a positive Postgres duration with an explicit unit (e.g. 5s, 100ms, 1min, 2h); a bare integer or 0 is rejected (0 disables the timeout)", cfg.StatementTimeout)
 	}
 	return cfg, nil
 }
 
-// postgresDurationRE matches the Postgres duration strings the migrator
-// accepts: an integer optionally followed by one of the standard units.
-// Postgres also accepts plain integers (interpreted as ms for lock_timeout
-// and statement_timeout), so the unit is optional.
-var postgresDurationRE = regexp.MustCompile(`^\s*[0-9]+\s*(us|ms|s|min|h|d)?\s*$`)
+// postgresDurationRE matches a Postgres duration for the migrator: a positive
+// integer followed by a MANDATORY unit. Two things it deliberately rejects:
+//   - A bare integer. Postgres would interpret a unitless lock_timeout /
+//     statement_timeout as MILLISECONDS, so "5" silently means 5ms — an easy way
+//     to set an absurdly short timeout by accident. Requiring an explicit unit
+//     removes the ambiguity.
+//   - A zero value ("0", "0s", "00min"). In Postgres, lock_timeout /
+//     statement_timeout of 0 means "DISABLED / wait forever", which silently
+//     defeats the fail-fast the migrator timeouts exist to provide. The numeric
+//     part is checked to be > 0 in isPostgresDuration.
+var postgresDurationRE = regexp.MustCompile(`^\s*([0-9]+)\s*(us|ms|s|min|h|d)\s*$`)
 
 func isPostgresDuration(s string) bool {
-	return postgresDurationRE.MatchString(s)
+	m := postgresDurationRE.FindStringSubmatch(s)
+	if m == nil {
+		return false // not a positive integer + explicit unit
+	}
+	n, err := strconv.Atoi(m[1])
+	return err == nil && n > 0 // reject zero: it means "disabled" in Postgres
 }
 
 // Load reads all environment variables and returns a validated Config.

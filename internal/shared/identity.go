@@ -31,10 +31,13 @@ type targetUserContextKey struct{}
 // is therefore caught uniformly as a 401 when the value is read, never as a 500
 // at query time.
 //
-// Template surface: no in-repo production caller by design. Auth middleware is
-// the adopter's to wire (see .claude/rules/decisions.md #13), and this is
-// exercised by identity_test.go. `make deadcode` flags it as unreachable from
-// the binaries' mains; that is expected, not dead code. Do not delete.
+// The shipped OIDC authentication middleware is the in-repo production caller:
+// after validating the Bearer token it maps the (issuer, subject) to an internal
+// UUID and stores it here (internal/middleware/auth_middleware.go), so the value
+// is reachable from cmd/api's main when auth is enabled. It is also exercised by
+// identity_test.go. An adopter swapping in different auth middleware keeps using
+// this same seam. (Historically this was documented as having no in-repo caller,
+// which was true only before the auth middleware landed — see decisions.md #13.)
 func WithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, userIDContextKey{}, userID)
 }

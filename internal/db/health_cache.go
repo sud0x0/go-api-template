@@ -57,8 +57,7 @@ func (c *HealthCache) Check(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := c.now()
-	if c.hasValue && c.ttl > 0 && now.Before(c.expires) {
+	if c.hasValue && c.ttl > 0 && c.now().Before(c.expires) {
 		return c.lastErr
 	}
 
@@ -69,7 +68,15 @@ func (c *HealthCache) Check(ctx context.Context) error {
 		return err
 	}
 	c.lastErr = err
-	c.expires = now.Add(c.ttl)
+	// Anchor the TTL to when the check COMPLETED, not when Check() was entered.
+	// The ping runs under its own timeout (HealthCheck applies 3s) which EXCEEDS
+	// the 2s readiness TTL, so anchoring to the pre-check time would write an
+	// entry that is already expired the moment it is stored — the result would
+	// never be served from cache, and a /readyz flood would serialise on the held
+	// mutex into back-to-back full-timeout pings (the very DoS the cache exists to
+	// prevent). Re-reading the clock here bounds the served window to [ttl] AFTER
+	// completion regardless of how long the check took.
+	c.expires = c.now().Add(c.ttl)
 	c.hasValue = true
 	return err
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -217,7 +218,17 @@ func (a *OPAAuthorizer) decide(ctx context.Context, input opaInput) (bool, error
 	if err != nil {
 		return false, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	// Drain to EOF before Close on EVERY return path. json.Decoder.Decode stops
+	// at the end of the JSON value and may leave trailing bytes (a newline, or an
+	// unread body on the non-200 path) unconsumed; Go's Transport only returns a
+	// connection to the keep-alive pool when the body is read to EOF AND closed.
+	// Without the drain, OPA authorisation — which sits on every request's hot
+	// path — would open a fresh TCP connection to the sidecar per request. The
+	// body is small and bounded (a decision document), so io.Copy is cheap.
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return false, &opaStatusError{status: resp.StatusCode}

@@ -260,6 +260,10 @@ func (a *OIDCAuthenticator) Handler(next http.Handler) http.Handler {
 		// policy is written against these internal roles, not IdP group names.
 		ctx := shared.WithUserID(r.Context(), internalUUID)
 		ctx = withRoles(ctx, mapClaimsToRoles(claims.Roles, claims.Groups))
+		// Enrich the request-scoped logger so every line for this authenticated
+		// request (handler lines AND the "request completed" summary) carries
+		// user_id. No-op when the request logger installed no holder.
+		BindUserID(ctx, internalUUID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
