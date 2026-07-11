@@ -103,6 +103,88 @@ func TestCORS_RejectedOriginNotReflected(t *testing.T) {
 	}
 }
 
+// TestCORS_Preflight verifies the tightened preflight handling: only a genuine
+// preflight (OPTIONS + Access-Control-Request-Method) is short-circuited 204,
+// the announced request headers are reflected, and the request method/headers
+// are added to Vary.
+func TestCORS_Preflight(t *testing.T) {
+	allowed := "http://allowed.example"
+	mw := CORS(CORSConfig{AllowedOrigins: []string{allowed}})
+	// A next handler that flags if it was reached (a genuine preflight must NOT
+	// reach it; a bare OPTIONS must).
+	var reached bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	preflight := func(origin, method, reqHeaders string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodOptions, "/anything", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if method != "" {
+			req.Header.Set("Access-Control-Request-Method", method)
+		}
+		if reqHeaders != "" {
+			req.Header.Set("Access-Control-Request-Headers", reqHeaders)
+		}
+		rr := httptest.NewRecorder()
+		reached = false
+		mw(next).ServeHTTP(rr, req)
+		return rr
+	}
+
+	t.Run("genuine preflight reflects requested headers and 204s", func(t *testing.T) {
+		rr := preflight(allowed, http.MethodPost, "X-Custom, Content-Type")
+		if reached {
+			t.Error("a genuine preflight must be short-circuited, not passed to the handler")
+		}
+		if rr.Code != http.StatusNoContent {
+			t.Errorf("preflight status: got %d want 204", rr.Code)
+		}
+		if got := rr.Header().Get("Access-Control-Allow-Headers"); got != "X-Custom, Content-Type" {
+			t.Errorf("Allow-Headers should reflect the requested headers, got %q", got)
+		}
+		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != allowed {
+			t.Errorf("Allow-Origin: got %q want %q", got, allowed)
+		}
+		vary := rr.Header().Values("Vary")
+		for _, want := range []string{"Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"} {
+			if !contains(vary, want) {
+				t.Errorf("Vary should include %q, got %v", want, vary)
+			}
+		}
+	})
+
+	t.Run("preflight without announced headers uses the default set", func(t *testing.T) {
+		rr := preflight(allowed, http.MethodPost, "")
+		if got := rr.Header().Get("Access-Control-Allow-Headers"); got != defaultAllowHeaders {
+			t.Errorf("Allow-Headers fallback: got %q want %q", got, defaultAllowHeaders)
+		}
+	})
+
+	t.Run("preflight from a disallowed origin gets 204 with no CORS headers", func(t *testing.T) {
+		rr := preflight("http://evil.example", http.MethodPost, "X-Custom")
+		if rr.Code != http.StatusNoContent {
+			t.Errorf("status: got %d want 204", rr.Code)
+		}
+		if got := rr.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Errorf("disallowed origin must not be reflected, got %q", got)
+		}
+	})
+
+	t.Run("bare OPTIONS (no preflight header) is NOT swallowed", func(t *testing.T) {
+		rr := preflight(allowed, "", "")
+		if !reached {
+			t.Error("a bare OPTIONS without Access-Control-Request-Method must pass through to the handler")
+		}
+		if rr.Code != http.StatusTeapot {
+			t.Errorf("bare OPTIONS should reach the handler (418), got %d", rr.Code)
+		}
+	})
+}
+
 func contains(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
 }

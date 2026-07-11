@@ -28,6 +28,12 @@ import (
 // derives the target without parsing bodies on the hot path.
 const targetUserParam = "user"
 
+// maxOPAResponseBytes bounds how much of an OPA decision response the middleware
+// will PARSE. A decision document is a few bytes; 1 MiB is a generous ceiling
+// that still stops a misconfigured or hostile response from ballooning memory
+// during json decode. See decide().
+const maxOPAResponseBytes = 1 << 20 // 1 MiB
+
 // errUndefinedDecision is returned when OPA responds 200 but with no "result"
 // key: an undefined decision (no matching rule and no default). It is a DENY.
 var errUndefinedDecision = errors.New("opa returned an undefined decision (no result)")
@@ -234,8 +240,15 @@ func (a *OPAAuthorizer) decide(ctx context.Context, input opaInput) (bool, error
 		return false, &opaStatusError{status: resp.StatusCode}
 	}
 
+	// Cap how much of the response we will PARSE. A decision document is a few
+	// bytes ({"result":true}); a response larger than maxOPAResponseBytes is a
+	// misconfiguration or a hostile/oversized body, so bound the reader so decode
+	// cannot balloon memory. If a valid JSON value does not complete within the
+	// cap, Decode hits EOF mid-value and errors → fail closed. The keep-alive
+	// drain above still reads resp.Body itself to EOF (the sidecar is trusted and
+	// local, decisions.md #17), so connection reuse is unaffected.
 	var decision opaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decision); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxOPAResponseBytes)).Decode(&decision); err != nil {
 		return false, err
 	}
 	if decision.Result == nil {

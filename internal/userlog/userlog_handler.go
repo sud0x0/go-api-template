@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
@@ -29,7 +31,9 @@ import (
 // The key lives in internal/shared (not this feature package) so middleware,
 // which is infrastructure, never has to import a feature.
 type HandlerMetrics interface {
-	IncAPIError(feature, errorType string)
+	// IncAPIError takes the request context so the counter increment can carry a
+	// trace exemplar linking it to the active span (see metrics.Metrics.IncAPIError).
+	IncAPIError(ctx context.Context, feature, errorType string)
 }
 
 // Handler handles HTTP requests for logs.
@@ -48,6 +52,17 @@ func NewLogHandler(service logService, log logLogger, m HandlerMetrics) *Handler
 	if err := shared.RegisterRuneLenValidators(v); err != nil {
 		panic("log_handler: failed to register rune validators: " + err.Error())
 	}
+	// Report the JSON tag name (the wire name a client sees) as the field name in
+	// validation errors, so a failure surfaces as "date_and_time", not the Go
+	// field "DateAndTime". The names come from struct tags → bounded (see
+	// newValidationError / ValidationError).
+	v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+		name, _, _ := strings.Cut(fld.Tag.Get("json"), ",")
+		if name == "-" {
+			return ""
+		}
+		return name
+	})
 	return &Handler{
 		service:  service,
 		logger:   log,
@@ -147,6 +162,32 @@ func decodeJSONBody(r *http.Request, dst any) error {
 	return nil
 }
 
+// newValidationError converts a validator failure into a bounded ValidationError
+// naming the offending JSON field(s). If err is not a validator.ValidationErrors
+// (unexpected), it falls back to the plain ErrValidation sentinel so the caller
+// still gets a validation-typed 400. Field names come from the struct's json
+// tags (via RegisterTagNameFunc), never from request data.
+func newValidationError(err error) error {
+	var ve validator.ValidationErrors
+	if !errors.As(err, &ve) {
+		return ErrValidation
+	}
+	seen := make(map[string]struct{}, len(ve))
+	fields := make([]string, 0, len(ve))
+	for _, fe := range ve {
+		f := fe.Field()
+		if f == "" {
+			continue
+		}
+		if _, dup := seen[f]; dup {
+			continue
+		}
+		seen[f] = struct{}{}
+		fields = append(fields, f)
+	}
+	return &ValidationError{Fields: fields}
+}
+
 // handleError maps package errors to HTTP responses and increments the
 // api_errors_total counter with a bounded error_type label. This is the
 // single place where errors are logged AND counted. Lower layers wrap
@@ -159,34 +200,34 @@ func (h *Handler) handleError(ctx context.Context, w http.ResponseWriter, err er
 	// it goes straight through the shared writer.
 	var limitErr *shared.LimitExceededError
 	if errors.As(err, &limitErr) {
-		h.metrics.IncAPIError(FeatureName, ErrTypeLimitExceeded)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeLimitExceeded)
 		shared.WriteJSONErrorPayload(w, http.StatusBadRequest, limitErr)
 		return
 	}
 
 	switch {
 	case errors.Is(err, ErrDatabase):
-		h.metrics.IncAPIError(FeatureName, ErrTypeDatabase)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeDatabase)
 		// Log the underlying cause. Multi-%w wrapping preserves it for diagnostics.
 		log.LogError(ErrDatabase, err)
 		shared.WriteJSONError(w, http.StatusInternalServerError, ErrTypeDatabase, "database error occurred")
 	case errors.Is(err, ErrUnauthorised):
-		h.metrics.IncAPIError(FeatureName, ErrTypeUnauthorised)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeUnauthorised)
 		shared.WriteUnauthorised(w, ErrTypeUnauthorised, "unauthorised access")
 	case errors.Is(err, ErrMissingParameters):
-		h.metrics.IncAPIError(FeatureName, ErrTypeMissingParameters)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeMissingParameters)
 		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeMissingParameters, "missing required parameters")
 	case errors.Is(err, ErrInvalidInput):
-		h.metrics.IncAPIError(FeatureName, ErrTypeInvalidInput)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInvalidInput)
 		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeInvalidInput, "invalid input")
 	case errors.Is(err, shared.ErrInvalidPagination):
-		h.metrics.IncAPIError(FeatureName, ErrTypeInvalidPagination)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInvalidPagination)
 		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeInvalidPagination, "invalid pagination parameters")
 	case errors.Is(err, ErrLogNotFound):
-		h.metrics.IncAPIError(FeatureName, ErrTypeLogNotFound)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeLogNotFound)
 		shared.WriteJSONError(w, http.StatusNotFound, ErrTypeLogNotFound, "log not found")
 	case errors.Is(err, ErrInvalidDateTime):
-		h.metrics.IncAPIError(FeatureName, ErrTypeInvalidDateTime)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInvalidDateTime)
 		// Derive the 400 message from the sentinel itself so the RFC3339 hint
 		// string is written in exactly one place (the ErrInvalidDateTime var).
 		// A structured InvalidDateTimeError (batch path) additionally names the
@@ -199,17 +240,29 @@ func (h *Handler) handleError(ctx context.Context, w http.ResponseWriter, err er
 			msg = dtErr.Error()
 		}
 		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeInvalidDateTime, msg)
+	case errors.Is(err, ErrInvalidDateRange):
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInvalidDateRange)
+		// The message is the sentinel's own constant text (names both fields),
+		// bounded and safe to surface.
+		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeInvalidDateRange, ErrInvalidDateRange.Error())
 	case errors.Is(err, ErrBodyTooLarge):
-		h.metrics.IncAPIError(FeatureName, ErrTypeBodyTooLarge)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeBodyTooLarge)
 		shared.WriteJSONError(w, http.StatusRequestEntityTooLarge, ErrTypeBodyTooLarge, "request body exceeds the maximum allowed size")
 	case errors.Is(err, ErrValidation):
-		h.metrics.IncAPIError(FeatureName, ErrTypeValidation)
-		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeValidation, "validation error")
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeValidation)
+		// Surface the failing field name(s) when present (bounded, from struct
+		// tags); fall back to the generic message for a plain ErrValidation.
+		msg := "validation error"
+		var ve *ValidationError
+		if errors.As(err, &ve) {
+			msg = ve.Error()
+		}
+		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeValidation, msg)
 	case errors.Is(err, ErrInvalidReqBody):
-		h.metrics.IncAPIError(FeatureName, ErrTypeInvalidReqBody)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInvalidReqBody)
 		shared.WriteJSONError(w, http.StatusBadRequest, ErrTypeInvalidReqBody, "invalid request body")
 	default:
-		h.metrics.IncAPIError(FeatureName, ErrTypeInternal)
+		h.metrics.IncAPIError(ctx, FeatureName, ErrTypeInternal)
 		log.LogError(ErrInternalServer, err)
 		shared.WriteJSONError(w, http.StatusInternalServerError, ErrTypeInternal, "internal server error")
 	}
@@ -376,7 +429,7 @@ func (h *Handler) CreateLog(w http.ResponseWriter, r *http.Request) {
 	req.Log = shared.SanitiseNullBytes(req.Log)
 
 	if err := h.validate.Struct(req); err != nil {
-		h.handleError(ctx, w, ErrValidation)
+		h.handleError(ctx, w, newValidationError(err))
 		return
 	}
 
@@ -434,7 +487,7 @@ func (h *Handler) BatchCreate(w http.ResponseWriter, r *http.Request) {
 	// fields exactly as a single create does. The rune limit and RFC3339 date
 	// are enforced per entry in the service.
 	if err := h.validate.Struct(req); err != nil {
-		h.handleError(ctx, w, ErrValidation)
+		h.handleError(ctx, w, newValidationError(err))
 		return
 	}
 
@@ -476,7 +529,7 @@ func (h *Handler) UpdateLog(w http.ResponseWriter, r *http.Request) {
 	req.Log = shared.SanitiseNullBytes(req.Log)
 
 	if err := h.validate.Struct(req); err != nil {
-		h.handleError(ctx, w, ErrValidation)
+		h.handleError(ctx, w, newValidationError(err))
 		return
 	}
 

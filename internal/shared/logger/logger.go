@@ -120,32 +120,60 @@ func SetDefaultSlog(l Logger) {
 	}
 }
 
-// slogHandlerForLevel builds the JSON handler used in production with
-// our RFC3339 time formatting.
-func slogHandlerForLevel(logLevel string, w *os.File) slog.Handler {
-	var level slog.Level
+// timeFormat is RFC3339 with MILLISECOND precision. Plain RFC3339 resolves only
+// to the second, which is too coarse to order the several log lines a single
+// fast request emits; millisecond precision keeps incident forensics able to
+// reconstruct within-request ordering while staying RFC3339-parseable.
+const timeFormat = "2006-01-02T15:04:05.000Z07:00"
+
+// levelFor maps a configured log-level name to a slog.Level. ok is false for an
+// unrecognised name. It is the SINGLE SOURCE OF TRUTH for the accepted level
+// names: slogHandlerForLevel uses it to pick the level, and config.Load
+// validates the configured value against it (via IsValidLevel) so an unknown
+// LOG_LEVEL fails fast at startup rather than silently defaulting to info.
+func levelFor(logLevel string) (slog.Level, bool) {
 	switch logLevel {
 	case "development", "dev":
-		level = slog.LevelDebug
+		return slog.LevelDebug, true
 	case "production", "prod":
-		level = slog.LevelInfo
+		return slog.LevelInfo, true
 	case "quiet":
-		level = slog.LevelWarn
+		return slog.LevelWarn, true
 	case "silent", "errors":
-		level = slog.LevelError
+		return slog.LevelError, true
 	default:
-		level = slog.LevelInfo
+		return slog.LevelInfo, false
 	}
+}
+
+// IsValidLevel reports whether logLevel is a recognised log-level name. config
+// validation calls this so a typo'd LOG_LEVEL is rejected, not silently mapped
+// to info.
+func IsValidLevel(logLevel string) bool {
+	_, ok := levelFor(logLevel)
+	return ok
+}
+
+// replaceTimeAttr is the slog ReplaceAttr that renders the time field in our
+// millisecond-precision RFC3339 form (timeFormat). Named (not an inline closure)
+// so tests exercise the EXACT formatter production uses, not a copy that can
+// drift from it.
+func replaceTimeAttr(_ []string, a slog.Attr) slog.Attr {
+	if a.Key == slog.TimeKey {
+		if t, ok := a.Value.Any().(time.Time); ok {
+			return slog.String(a.Key, t.Format(timeFormat))
+		}
+	}
+	return a
+}
+
+// slogHandlerForLevel builds the JSON handler used in production with
+// our RFC3339 (millisecond-precision) time formatting.
+func slogHandlerForLevel(logLevel string, w *os.File) slog.Handler {
+	level, _ := levelFor(logLevel)
 	opts := &slog.HandlerOptions{
-		Level: level,
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				if t, ok := a.Value.Any().(time.Time); ok {
-					return slog.String(a.Key, t.Format(time.RFC3339))
-				}
-			}
-			return a
-		},
+		Level:       level,
+		ReplaceAttr: replaceTimeAttr,
 	}
 	return slog.NewJSONHandler(w, opts)
 }

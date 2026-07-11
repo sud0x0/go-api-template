@@ -450,7 +450,7 @@ Every line is JSON to stdout (no log files, no rotation in the app, the orchestr
   "method": "POST",
   "path": "/api/v1/logs",
   "ip": "203.0.113.5:1234",
-  "user_id": "u-42",
+  "user_id": "550e8400-e29b-41d4-a716-446655440000",
   "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
   "span_id": "00f067aa0ba902b7"
 }
@@ -473,7 +473,7 @@ Every line is JSON to stdout (no log files, no rotation in the app, the orchestr
 {"…", "level":"ERROR", "msg":"error occurred",
  "service":"go-api", "version":"1.2.3", "commit":"abc1234",
  "request_id":"req-xyz", "method":"GET", "path":"/api/v1/logs/{id}",
- "ip":"203.0.113.5:1234", "user_id":"u-42",
+ "ip":"203.0.113.5:1234", "user_id":"550e8400-e29b-41d4-a716-446655440000",
  "error":"database error",
  "actual_error":"getLog abc: database error: pq: connection refused"}
 ```
@@ -539,6 +539,8 @@ Configured via `CORSConfig` in main.go. Origins from `CORS_ALLOWED_ORIGINS` (com
 
 > **Trust assumption:** `X-Forwarded-For` is client-spoofable. `RealIP` is therefore **opt-in** via `TRUST_PROXY_HEADERS` (default `false`) and is only registered when the app sits behind a trusted reverse proxy or load balancer that overwrites these headers on every request. With the default `false` the headers are ignored and `r.RemoteAddr` is the real peer, safe for an app exposed directly to the internet. Leaving it off while spoofable headers are honoured would also poison any IP-keyed rate limiter (see below).
 
+> **Deploying behind a reverse proxy or BFF? Set `TRUST_PROXY_HEADERS=true`.** When any proxy (nginx / a load balancer / a Backend-For-Frontend) sits in front of this API, every connection's real peer is the proxy, so with `TRUST_PROXY_HEADERS=false` the app records the **proxy's** IP on every request. Two consequences: (1) the logged `ip` field is useless for incident response (one address for all clients), and (2) the IP-keyed app-level limiter (`RATE_LIMIT_RPM`, when enabled) collapses **all** traffic into a single bucket — one client's burst then 429s everyone. The pairing: front the API with a proxy that **overwrites** `X-Forwarded-For` on every request **and** set `TRUST_PROXY_HEADERS=true`, so `RealIP` resolves the true client IP. (Conversely, only set it true when such a proxy is present — a directly-exposed app with it on lets clients spoof their IP.)
+
 ### Handled at the infrastructure layer
 
 - **HSTS**: at the reverse proxy or load balancer (TLS terminates outside the app).
@@ -565,7 +567,7 @@ The limiter applies only to business routes (`/api/v1/*` and any future routes a
 
 ## Coding rules
 
-1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer. The API relies on `json.Encoder`'s HTML escaping (`<` → `<` etc.) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes` (Postgres `TEXT` cannot store `\x00`).
+1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer. The API relies on `json.Encoder`'s HTML escaping (`<` → `\u003c`, `>` → `\u003e`, `&` → `\u0026`) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes` (Postgres `TEXT` cannot store `\x00`).
 2. **Type and validate inputs.** UUID path params via `uuid.Parse` so a malformed id never reaches the database. Length limits via `rune_max` / `rune_min` / `rune_len` tags. Rune count matches Postgres `VARCHAR(N)` semantics.
 3. **Validate database output.** Every row read from Postgres is re-checked via `Model.Validate()` (defence in depth: a schema migration drift would surface here, not later in business logic).
 4. **Authenticate by default.** Every API endpoint requires authentication unless explicitly excluded.

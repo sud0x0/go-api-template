@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -211,9 +212,10 @@ func TestMiddleware_NormalisesMethodAttribute(t *testing.T) {
 func TestIncAPIError(t *testing.T) {
 	m, reader := newForTest(t)
 
-	m.IncAPIError("log", "database")
-	m.IncAPIError("log", "database")
-	m.IncAPIError("log", "validation")
+	ctx := context.Background()
+	m.IncAPIError(ctx, "log", "database")
+	m.IncAPIError(ctx, "log", "database")
+	m.IncAPIError(ctx, "log", "validation")
 
 	rm := collect(t, reader)
 	if v := sumInt64(t, rm, metricAPIErrors,

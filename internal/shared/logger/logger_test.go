@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testLogger builds a SlogLogger that writes JSON to buf. Same shape as
@@ -227,22 +228,14 @@ func TestSlogLogger_LogWarn_LevelGating(t *testing.T) {
 	}
 }
 
-// TestSlogLogger_TimeAttrIsRFC3339 verifies the ReplaceAttr time
-// formatting we promised in NewLogger's docs.
-func TestSlogLogger_TimeAttrIsRFC3339(t *testing.T) {
+// TestSlogLogger_TimeAttrIsRFC3339Millis verifies the time field is rendered in
+// millisecond-precision RFC3339 (timeFormat). It wires the EXACT production
+// ReplaceAttr (replaceTimeAttr) over a buffer so the assertion tracks production.
+func TestSlogLogger_TimeAttrIsRFC3339Millis(t *testing.T) {
 	buf := &bytes.Buffer{}
-	// Build manually with the slogHandlerForLevel path so the ReplaceAttr
-	// formatter is wired (testLogger uses a plain JSON handler).
 	h := slog.NewJSONHandler(buf, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.TimeKey {
-				if t, ok := a.Value.Any().(interface{ Format(string) string }); ok {
-					return slog.String(a.Key, t.Format("2006-01-02T15:04:05Z07:00"))
-				}
-			}
-			return a
-		},
+		Level:       slog.LevelDebug,
+		ReplaceAttr: replaceTimeAttr,
 	})
 	l := newSlogLogger("test", h)
 	l.LogInfo("hi")
@@ -252,8 +245,17 @@ func TestSlogLogger_TimeAttrIsRFC3339(t *testing.T) {
 	if !ok {
 		t.Fatalf("time was not a string: %v", entry["time"])
 	}
-	// Loose check: RFC3339 has a 'T' between date and time.
-	if !strings.Contains(timeStr, "T") {
-		t.Errorf("time %q does not look RFC3339-formatted", timeStr)
+	// It must parse under the millisecond RFC3339 layout AND round-trip to the
+	// same string — proving the exact precision (a second-only value would not
+	// re-render with the ".000" fraction).
+	parsed, err := time.Parse(timeFormat, timeStr)
+	if err != nil {
+		t.Fatalf("time %q is not %s-formatted: %v", timeStr, timeFormat, err)
+	}
+	if got := parsed.Format(timeFormat); got != timeStr {
+		t.Errorf("time %q does not round-trip through the millisecond layout (got %q)", timeStr, got)
+	}
+	if !strings.Contains(timeStr, "T") || !strings.Contains(timeStr, ".") {
+		t.Errorf("time %q is not millisecond-precision RFC3339", timeStr)
 	}
 }

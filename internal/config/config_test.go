@@ -124,9 +124,13 @@ func setRequiredDBEnv(t *testing.T) {
 
 	// Auth vars default to "disabled if unset"; clear any ambient values so a
 	// subtest starts from that documented baseline and sets only what it needs.
+	// LOG_LEVEL is cleared too so it falls back to the valid "production" default
+	// (a garbage value in the developer's shell must not fail unrelated config
+	// tests now that LOG_LEVEL is validated).
 	for _, k := range []string{
-		"OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_ENABLED",
+		"OIDC_ISSUER_URL", "OIDC_AUDIENCE", "OIDC_ENABLED", "OIDC_ALLOW_INSECURE",
 		"OPA_URL", "OPA_ENABLED", "OPA_DECISION_PATH", "OPA_TIMEOUT_MS",
+		"LOG_LEVEL",
 	} {
 		t.Setenv(k, "")
 	}
@@ -416,6 +420,50 @@ func TestLoad_AuthConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("non-loopback http issuer is rejected", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ISSUER_URL", "http://accounts.example.com")
+		t.Setenv("OIDC_AUDIENCE", "https://api.example.com")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER_URL") || !strings.Contains(err.Error(), "https") {
+			t.Fatalf("expected an https-required failure naming OIDC_ISSUER_URL, got: %v", err)
+		}
+	})
+
+	t.Run("loopback http issuers are allowed", func(t *testing.T) {
+		for _, issuer := range []string{
+			"http://localhost:9999", "http://127.0.0.1:9999", "http://[::1]:9999",
+		} {
+			t.Run(issuer, func(t *testing.T) {
+				setRequiredDBEnv(t)
+				t.Setenv("OIDC_ISSUER_URL", issuer)
+				t.Setenv("OIDC_AUDIENCE", "https://api.example.com")
+				if _, err := Load(); err != nil {
+					t.Fatalf("loopback http issuer %q should be allowed, got: %v", issuer, err)
+				}
+			})
+		}
+	})
+
+	t.Run("OIDC_ALLOW_INSECURE=true permits a non-loopback http issuer", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ISSUER_URL", "http://accounts.example.com")
+		t.Setenv("OIDC_AUDIENCE", "https://api.example.com")
+		t.Setenv("OIDC_ALLOW_INSECURE", "true")
+		if _, err := Load(); err != nil {
+			t.Fatalf("OIDC_ALLOW_INSECURE=true should permit an http issuer, got: %v", err)
+		}
+	})
+
+	t.Run("https issuer is always allowed", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("OIDC_ISSUER_URL", "https://accounts.example.com")
+		t.Setenv("OIDC_AUDIENCE", "https://api.example.com")
+		if _, err := Load(); err != nil {
+			t.Fatalf("https issuer should be allowed, got: %v", err)
+		}
+	})
+
 	t.Run("OPA enabled by URL", func(t *testing.T) {
 		setRequiredDBEnv(t)
 		t.Setenv("OPA_URL", "http://opa:8181")
@@ -498,4 +546,54 @@ func TestLoadDatabase_PoolSizeBounds(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoad_LogLevel verifies LOG_LEVEL validation: recognised names load, an
+// unknown value fails fast naming the variable (no silent fallback to info).
+func TestLoad_LogLevel(t *testing.T) {
+	for _, lvl := range []string{"development", "dev", "production", "prod", "quiet", "silent", "errors"} {
+		t.Run("valid_"+lvl, func(t *testing.T) {
+			setRequiredDBEnv(t)
+			t.Setenv("LOG_LEVEL", lvl)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("LOG_LEVEL=%q should load, got: %v", lvl, err)
+			}
+			if cfg.Log.Level != lvl {
+				t.Errorf("Log.Level: got %q want %q", cfg.Log.Level, lvl)
+			}
+		})
+	}
+
+	t.Run("unknown value rejected", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("LOG_LEVEL", "verbose")
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "LOG_LEVEL") {
+			t.Fatalf("expected failure naming LOG_LEVEL, got: %v", err)
+		}
+	})
+
+	t.Run("case-insensitive (lowercased)", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		t.Setenv("LOG_LEVEL", "Production")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("mixed-case LOG_LEVEL should load (lowercased), got: %v", err)
+		}
+		if cfg.Log.Level != "production" {
+			t.Errorf("Log.Level: got %q want lowercased production", cfg.Log.Level)
+		}
+	})
+
+	t.Run("unset defaults to production", func(t *testing.T) {
+		setRequiredDBEnv(t)
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("unset LOG_LEVEL should default, got: %v", err)
+		}
+		if cfg.Log.Level != "production" {
+			t.Errorf("default Log.Level: got %q want production", cfg.Log.Level)
+		}
+	})
 }

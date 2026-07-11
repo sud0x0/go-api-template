@@ -33,6 +33,7 @@ func TestHandleError_EveryErrTypeHasACase(t *testing.T) {
 		{ErrTypeMissingParameters, fmt.Errorf("ctx: %w", ErrMissingParameters), http.StatusBadRequest},
 		{ErrTypeInvalidPagination, fmt.Errorf("ctx: %w", shared.ErrInvalidPagination), http.StatusBadRequest},
 		{ErrTypeInvalidDateTime, fmt.Errorf("ctx: %w", ErrInvalidDateTime), http.StatusBadRequest},
+		{ErrTypeInvalidDateRange, fmt.Errorf("ctx: %w", ErrInvalidDateRange), http.StatusBadRequest},
 		{ErrTypeValidation, fmt.Errorf("ctx: %w", ErrValidation), http.StatusBadRequest},
 		{ErrTypeInvalidReqBody, fmt.Errorf("ctx: %w", ErrInvalidReqBody), http.StatusBadRequest},
 		{ErrTypeBodyTooLarge, fmt.Errorf("ctx: %w", ErrBodyTooLarge), http.StatusRequestEntityTooLarge},
@@ -47,9 +48,9 @@ func TestHandleError_EveryErrTypeHasACase(t *testing.T) {
 	// ErrType* constants. A new constant added without a row here trips this.
 	allErrTypes := []string{
 		ErrTypeLogNotFound, ErrTypeInvalidInput, ErrTypeMissingParameters,
-		ErrTypeInvalidPagination, ErrTypeInvalidDateTime, ErrTypeValidation,
-		ErrTypeInvalidReqBody, ErrTypeBodyTooLarge, ErrTypeUnauthorised,
-		ErrTypeDatabase, ErrTypeLimitExceeded, ErrTypeInternal,
+		ErrTypeInvalidPagination, ErrTypeInvalidDateTime, ErrTypeInvalidDateRange,
+		ErrTypeValidation, ErrTypeInvalidReqBody, ErrTypeBodyTooLarge,
+		ErrTypeUnauthorised, ErrTypeDatabase, ErrTypeLimitExceeded, ErrTypeInternal,
 	}
 	covered := make(map[string]bool, len(cases))
 	for _, c := range cases {

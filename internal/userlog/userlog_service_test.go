@@ -241,6 +241,32 @@ func TestService_getLogs_RejectsMalformedDate(t *testing.T) {
 	}
 }
 
+// TestService_getLogs_RejectsInvertedRange verifies start_date > end_date is a
+// bounded 400-mapped error (ErrInvalidDateRange), not a silently-empty result.
+// The repo is never called because normaliseDateRange rejects before any query.
+func TestService_getLogs_RejectsInvertedRange(t *testing.T) {
+	stub := &stubRepo{} // no getLogsFn set: a call would return the "not set" error
+	svc := NewLogService(stub, nil)
+	_, err := svc.getLogs(context.Background(), "u",
+		"2025-12-31T00:00:00Z", "2025-01-01T00:00:00Z", 10, 0)
+	if !errors.Is(err, ErrInvalidDateRange) {
+		t.Fatalf("inverted range: got %v, want ErrInvalidDateRange", err)
+	}
+	if stub.lastCallLog == "getLogs" {
+		t.Error("repo.getLogs must not be called for an inverted range")
+	}
+
+	// Equal bounds are a valid (single-instant) range and must reach the repo.
+	stub2 := &stubRepo{getLogsFn: func(_ context.Context, _, _, _ string, _, _ int) ([]Log, error) {
+		return []Log{}, nil
+	}}
+	svc2 := NewLogService(stub2, nil)
+	if _, err := svc2.getLogs(context.Background(), "u",
+		"2025-06-01T00:00:00Z", "2025-06-01T00:00:00Z", 10, 0); err != nil {
+		t.Errorf("equal bounds should be a valid range, got %v", err)
+	}
+}
+
 // ---- createLog --------------------------------------------------------------
 
 func TestService_createLog_RejectsOverLength(t *testing.T) {

@@ -20,6 +20,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -42,7 +43,7 @@ import (
 
 type noopAuthzMetrics struct{}
 
-func (noopAuthzMetrics) IncAPIError(_, _ string) {}
+func (noopAuthzMetrics) IncAPIError(_ context.Context, _, _ string) {}
 
 func envOrSkip(t *testing.T, key string) string {
 	t.Helper()

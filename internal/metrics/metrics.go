@@ -164,8 +164,13 @@ func (m *Metrics) QueryTracer() pgx.QueryTracer {
 // feature names are package-level constants (e.g. "log") and error_type values
 // come from the package's ErrType* constants. Never pass strings derived from
 // err.Error() here.
-func (m *Metrics) IncAPIError(feature, errorType string) {
-	m.apiErrors.Add(context.Background(), 1, metric.WithAttributes(
+//
+// ctx is the REQUEST context (threaded from the handler's handleError): passing
+// it lets the OTel SDK attach an exemplar linking this counter increment to the
+// request's active trace span, so a spike in api.errors is one click from the
+// traces that caused it. A background context would sever that link.
+func (m *Metrics) IncAPIError(ctx context.Context, feature, errorType string) {
+	m.apiErrors.Add(ctx, 1, metric.WithAttributes(
 		attribute.String(attrFeature, feature),
 		attribute.String(attrErrorType, errorType),
 	))

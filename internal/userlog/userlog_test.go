@@ -48,7 +48,7 @@ type testHandlerMetrics struct {
 	counts map[[2]string]float64
 }
 
-func (m *testHandlerMetrics) IncAPIError(feature, errorType string) {
+func (m *testHandlerMetrics) IncAPIError(_ context.Context, feature, errorType string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.counts[[2]string{feature, errorType}]++
@@ -1452,5 +1452,42 @@ func TestLimitExceededErrorAsType(t *testing.T) {
 	}
 	if limitErr.Limit != shared.LogMaxChars || limitErr.Current != 11000 {
 		t.Errorf("unexpected fields: %+v", limitErr)
+	}
+}
+
+// TestCreateLog_ValidationNamesField verifies fix #10: a struct-validation
+// failure surfaces the offending JSON field name in the message (bounded, from
+// struct tags), keeping error_type=validation. Here `log` is empty (fails the
+// `required` tag), so the message must name "log".
+func TestCreateLog_ValidationNamesField(t *testing.T) {
+	handler, _, errCV, cleanup := setupTestStack(t)
+	defer cleanup()
+
+	body, _ := json.Marshal(CreateRequest{DateAndTime: "2025-01-02T03:04:05Z", Log: ""})
+	req := createRequest(http.MethodPost, "/api/v1/logs", body, nil, nil)
+	rr := httptest.NewRecorder()
+	handler.CreateLog(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400. Body: %s", rr.Code, rr.Body.String())
+	}
+	assertErrorRecorded(t, errCV, ErrTypeValidation, 1)
+
+	var env struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil {
+		t.Fatalf("body not a JSON envelope: %v (%s)", err, rr.Body.String())
+	}
+	if env.Error != ErrTypeValidation {
+		t.Errorf("error type: got %q want %q", env.Error, ErrTypeValidation)
+	}
+	if !strings.Contains(env.Message, "log") {
+		t.Errorf("validation message should name the failing field \"log\", got %q", env.Message)
+	}
+	// The message must NOT leak any request value — only field names.
+	if strings.Contains(env.Message, "2025-01-02") {
+		t.Errorf("validation message leaked a request value: %q", env.Message)
 	}
 }

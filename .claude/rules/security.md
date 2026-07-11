@@ -10,7 +10,7 @@ Input sanitisation sits *below* those three in OWASP's defence hierarchy ([Input
 
 ## The seven rules
 
-1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer. The API relies on `json.Encoder`'s default HTML escaping (`<` → `<`) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes`.
+1. **Validate strictly, parameterise queries, encode on output.** The API stores exactly what the client sent. XSS prevention lives at the renderer. The API relies on `json.Encoder`'s default HTML escaping (`<` → `\u003c`, `>` → `\u003e`, `&` → `\u0026`) plus parameterised pgx queries. The only input cleaning is `shared.SanitiseNullBytes`.
 
 2. **Type and validate every input.** UUID path params via `uuid.Parse` so a malformed id never reaches Postgres (returns 400, not 500). Length limits via `rune_max` / `rune_min` / `rune_len` tags (registered through `shared.RegisterRuneLenValidators`). Rune count matches Postgres `VARCHAR(N)` semantics. Never use the stdlib `max` / `min` / `len` tags for user-facing text.
 

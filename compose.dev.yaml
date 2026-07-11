@@ -21,8 +21,12 @@ services:
       TZ: ${TZ:-Australia/Melbourne}
     volumes:
       - postgres_data:/var/lib/postgresql/data:Z
+    # Published ports are bound to 127.0.0.1 so the dev database is reachable from
+    # the host (psql, integration tests) but NOT from other machines on the LAN /
+    # any wider network. Container-to-container traffic uses the compose network
+    # (service name `db:5432`), not the published port, so this does not affect it.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
@@ -41,8 +45,11 @@ services:
       # Both sides track $PORT / $METRICS_PORT so a non-default port in .env
       # binds the same port inside the container as it is published on. The
       # container HEALTHCHECK already tracks $PORT via config.ResolvePort.
-      - "${PORT:-8080}:${PORT:-8080}"
-      - "${METRICS_PORT:-9090}:${METRICS_PORT:-9090}"
+      # Bound to 127.0.0.1: this is a LOCAL-DEV stack, so it must not be exposed
+      # to the LAN. The METRICS_PORT admin listener has NO auth (restricted at the
+      # infra layer in prod), so loopback-only is especially important for it here.
+      - "127.0.0.1:${PORT:-8080}:${PORT:-8080}"
+      - "127.0.0.1:${METRICS_PORT:-9090}:${METRICS_PORT:-9090}"
     # Wholesale pass-through of .env so EVERY documented variable reaches the
     # container — no enumerated list to drift out of sync with .env.example
     # (previously TRUST_PROXY_HEADERS, RATE_LIMIT_RPM, PUBLIC_READINESS, the
@@ -81,10 +88,13 @@ services:
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./deploy/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:Z
+    # Loopback-only: the app exports to the Collector over the compose network
+    # (otel-collector:4318), so these published ports exist only for host-side
+    # debugging (scraping :8889) and must not be exposed beyond localhost.
     ports:
-      - "4317:4317" # OTLP gRPC receiver
-      - "4318:4318" # OTLP HTTP receiver (the app exports here)
-      - "8889:8889" # Prometheus exporter, scrape metrics at localhost:8889/metrics
+      - "127.0.0.1:4317:4317" # OTLP gRPC receiver
+      - "127.0.0.1:4318:4318" # OTLP HTTP receiver (the app exports here)
+      - "127.0.0.1:8889:8889" # Prometheus exporter, scrape metrics at localhost:8889/metrics
 
   # Open Policy Agent (OPA) sidecar: LAYER 2 authorisation. The app POSTs the
   # decision input to OPA's REST Data API and enforces the boolean result, failing
@@ -118,10 +128,13 @@ services:
       - "/policies"
     volumes:
       - ./deploy/opa:/policies:ro,Z
+    # Loopback-only: the app calls OPA over the compose network (opa:8181); this
+    # published port is only for host-side decision debugging. OPA has no auth, so
+    # it must never be reachable beyond localhost.
     ports:
       # OPA REST API. Query a decision from the host with, e.g.:
       #   curl localhost:8181/v1/data/api/authz/allow -d '{"input":{"roles":["admin"]}}'
-      - "8181:8181"
+      - "127.0.0.1:8181:8181"
     healthcheck:
       # The default opa image is distroless (no shell / curl), so probe the
       # server's GET /health using OPA's OWN binary via http.send. --fail makes an

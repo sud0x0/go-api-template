@@ -41,7 +41,7 @@ func (m *integrationLogger) WithRequestContext(_ logger.RequestContext) logger.L
 // integration tests that don't care about the api_errors_total counter.
 type noopHandlerMetrics struct{}
 
-func (noopHandlerMetrics) IncAPIError(_, _ string) {}
+func (noopHandlerMetrics) IncAPIError(_ context.Context, _, _ string) {}
 
 func mustEnv(t *testing.T, key string) string {
 	t.Helper()

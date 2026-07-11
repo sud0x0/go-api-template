@@ -78,11 +78,20 @@ func normaliseDateRange(startDate, endDate string) (string, string, error) {
 	if endDate == "" {
 		endDate = "2099-12-31T23:59:59Z"
 	}
-	if _, err := time.Parse(time.RFC3339, startDate); err != nil {
+	start, err := time.Parse(time.RFC3339, startDate)
+	if err != nil {
 		return "", "", &InvalidDateTimeError{Field: "start_date", Index: -1}
 	}
-	if _, err := time.Parse(time.RFC3339, endDate); err != nil {
+	end, err := time.Parse(time.RFC3339, endDate)
+	if err != nil {
 		return "", "", &InvalidDateTimeError{Field: "end_date", Index: -1}
+	}
+	// An inverted range (start after end) matches no rows in the BETWEEN query, so
+	// without this check a client typo silently returns an empty list. Reject it
+	// as a 400 instead (ErrInvalidDateRange). Equal bounds are allowed (a valid,
+	// possibly-single-instant range).
+	if start.After(end) {
+		return "", "", ErrInvalidDateRange
 	}
 	return startDate, endDate, nil
 }

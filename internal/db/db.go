@@ -5,7 +5,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -168,19 +167,34 @@ func (d *DB) WithTransaction(ctx context.Context, fn func(tx pgx.Tx) error) erro
 // here, so adding a feature never edits this core package. An empty/nil list
 // makes this a no-op.
 func verifySchema(ctx context.Context, pool *pgxpool.Pool, requiredTables []string) error {
-	query := `
+	if len(requiredTables) == 0 {
+		return nil
+	}
+	// One round-trip: fetch the subset of requiredTables that EXIST via
+	// `= ANY($1)` (pgx encodes the []string as a text[] parameter), then diff
+	// locally. Previously this ran one QueryRow per table — N round-trips at
+	// startup; the set is tiny, but a single query is cleaner and O(1) latency.
+	const query = `
 		SELECT table_name
 		FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name = $1
+		WHERE table_schema = 'public' AND table_name = ANY($1)
 	`
+	rows, err := pool.Query(ctx, query, requiredTables)
+	if err != nil {
+		return fmt.Errorf("check required tables: %w", err)
+	}
+	present, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("check required tables: %w", err)
+	}
+	found := make(map[string]struct{}, len(present))
+	for _, t := range present {
+		found[t] = struct{}{}
+	}
 	var missing []string
-	for _, table := range requiredTables {
-		var tableName string
-		err := pool.QueryRow(ctx, query, table).Scan(&tableName)
-		if errors.Is(err, pgx.ErrNoRows) {
-			missing = append(missing, table)
-		} else if err != nil {
-			return fmt.Errorf("check table %s: %w", table, err)
+	for _, t := range requiredTables {
+		if _, ok := found[t]; !ok {
+			missing = append(missing, t)
 		}
 	}
 	if len(missing) > 0 {

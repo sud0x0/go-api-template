@@ -3,6 +3,7 @@ package userlog
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/sud0x0/go-api-template/internal/shared"
 	"github.com/sud0x0/go-api-template/internal/shared/logger"
@@ -67,8 +68,35 @@ func (e *InvalidDateTimeError) Is(target error) bool {
 	return target == ErrInvalidDateTime
 }
 
+// ErrInvalidDateRange indicates start_date is AFTER end_date. Without this the
+// query would silently return an empty set (Postgres BETWEEN with inverted
+// bounds matches nothing), hiding a client mistake behind "no results". The
+// message names both fields and is a constant, so nothing from a lower layer
+// leaks. Maps to error_type=invalid_date_range → 400.
+var ErrInvalidDateRange = errors.New("start_date must not be after end_date")
+
 // ErrValidation indicates a validation error.
 var ErrValidation = errors.New("validation error")
+
+// ValidationError carries the names of the request fields that failed struct
+// validation, so the client learns WHICH field was wrong. The names come from
+// the struct's json tags (compile-time constants, surfaced via the validator's
+// RegisterTagNameFunc in NewLogHandler), so they are BOUNDED and safe to return;
+// no user-supplied value is ever included. It Is(ErrValidation) so existing
+// errors.Is checks and the bounded error_type mapping (validation) are unchanged.
+type ValidationError struct {
+	Fields []string // json field names that failed, e.g. ["date_and_time", "log"]
+}
+
+func (e *ValidationError) Error() string {
+	if len(e.Fields) == 0 {
+		return ErrValidation.Error()
+	}
+	return "validation failed on field(s): " + strings.Join(e.Fields, ", ")
+}
+
+// Is makes a ValidationError match the ErrValidation sentinel.
+func (e *ValidationError) Is(target error) bool { return target == ErrValidation }
 
 // ErrInvalidReqBody indicates the request body is invalid.
 var ErrInvalidReqBody = errors.New("invalid request body")
@@ -126,6 +154,7 @@ const (
 	ErrTypeMissingParameters = "missing_parameters"
 	ErrTypeInvalidPagination = "invalid_pagination"
 	ErrTypeInvalidDateTime   = "invalid_datetime"
+	ErrTypeInvalidDateRange  = "invalid_date_range"
 	ErrTypeValidation        = "validation"
 	ErrTypeInvalidReqBody    = "invalid_request_body"
 	ErrTypeBodyTooLarge      = "body_too_large"

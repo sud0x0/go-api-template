@@ -7,12 +7,15 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sud0x0/go-api-template/internal/shared/logger"
 )
 
 // DefaultPort is the default public HTTP port. It is defined once here and
@@ -171,6 +174,15 @@ type OIDCConfig struct {
 	// Required when OIDC is enabled: an empty audience would force go-oidc's
 	// SkipClientIDCheck, which we never do.
 	Audience string
+	// AllowInsecure (OIDC_ALLOW_INSECURE, default false) is a DEV-ONLY opt-in that
+	// relaxes the "issuer must be https" rule for a non-loopback http:// issuer.
+	// The issuer is where discovery + the token-signing JWKS are fetched, so plain
+	// http on an untrusted network is a MITM vector on the signing keys. A loopback
+	// issuer (localhost / 127.0.0.1 / ::1) is always allowed without this flag;
+	// this flag is only for the rarer "http issuer on a non-loopback dev host"
+	// case. Never set it in production. Mirrors the sibling BFF's
+	// requireSecureBackendUrl.
+	AllowInsecure bool
 }
 
 // OPAConfig holds the Open Policy Agent authorisation settings. After
@@ -391,6 +403,10 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	oidcAllowInsecure, err := getEnvBool("OIDC_ALLOW_INSECURE", false)
+	if err != nil {
+		return nil, err
+	}
 	opaURL := getEnv("OPA_URL", "")
 	opaEnabled, err := getEnvBool("OPA_ENABLED", opaURL != "")
 	if err != nil {
@@ -432,9 +448,10 @@ func Load() (*Config, error) {
 		},
 		Auth: AuthConfig{
 			OIDC: OIDCConfig{
-				Enabled:   oidcEnabled,
-				IssuerURL: oidcIssuer,
-				Audience:  getEnv("OIDC_AUDIENCE", ""),
+				Enabled:       oidcEnabled,
+				IssuerURL:     oidcIssuer,
+				Audience:      getEnv("OIDC_AUDIENCE", ""),
+				AllowInsecure: oidcAllowInsecure,
 			},
 			OPA: OPAConfig{
 				Enabled:      opaEnabled,
@@ -455,6 +472,18 @@ func Load() (*Config, error) {
 // validate checks the non-database configuration values. LoadDatabase
 // already validated the Database section before Load embedded it.
 func (c *Config) validate() error {
+	// LOG_LEVEL must be a recognised name. Previously an unknown value silently
+	// mapped to info (slogHandlerForLevel's default), violating the repo's
+	// no-silent-fallback rule: an operator who typed "verbose" expecting more
+	// output would get info and never know. Fail fast naming the variable. The
+	// accepted names are the single source of truth in logger.levelFor.
+	if !logger.IsValidLevel(c.Log.Level) {
+		return fmt.Errorf(
+			"LOG_LEVEL %q is not a recognised level "+
+				"(development/dev, production/prod, quiet, silent/errors)",
+			c.Log.Level)
+	}
+
 	// Positive-duration guard. A zero or negative timeout silently DISABLES the
 	// protection it configures: Go's http.Server treats a zero Read/Write/Idle
 	// timeout as "no timeout" (a slow-loris DoS surface), and a non-positive pool
@@ -549,6 +578,20 @@ func (c *Config) validate() error {
 					"NOT a browser client_id; an empty audience would disable aud validation)",
 			)
 		}
+		// The issuer must be HTTPS. go-oidc fetches the discovery document and the
+		// token-signing JWKS from it, so a plain-http issuer on an untrusted network
+		// is a man-in-the-middle vector on the keys the whole auth layer trusts.
+		// Loopback issuers (localhost / 127.0.0.1 / ::1) are allowed for local dev
+		// against a stub IdP; OIDC_ALLOW_INSECURE=true is an explicit dev opt-in for
+		// any other http host. Mirrors the sibling BFF's requireSecureBackendUrl.
+		if u, perr := url.Parse(c.Auth.OIDC.IssuerURL); perr == nil && u.Scheme == "http" &&
+			!c.Auth.OIDC.AllowInsecure && !isLoopbackHost(u.Hostname()) {
+			return fmt.Errorf(
+				"OIDC_ISSUER_URL %q must use https: a plain-http issuer exposes OIDC discovery and "+
+					"the token-signing JWKS to a man-in-the-middle. A loopback host is allowed for dev, "+
+					"or set OIDC_ALLOW_INSECURE=true to override (dev only, never in production)",
+				c.Auth.OIDC.IssuerURL)
+		}
 	}
 
 	// OPA authorisation, when enabled, needs a sidecar URL and a bounded timeout.
@@ -594,6 +637,20 @@ func (c *DatabaseConfig) ConnectionString() string {
 	q.Set("sslmode", c.SSLMode)
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+// isLoopbackHost reports whether host (a URL hostname with no port) is a
+// loopback address the OIDC https requirement is relaxed for in local dev:
+// "localhost" or any loopback IP (127.0.0.0/8, ::1). Mirrors the sibling BFF's
+// requireSecureBackendUrl loopback allowance.
+func isLoopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func parseOrigins(raw string) []string {

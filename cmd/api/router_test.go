@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,18 @@ func TestPublicRouter_MethodNotAllowedEnvelope(t *testing.T) {
 	}
 	if env.ErrorType != shared.ErrTypeMethodNotAllowed {
 		t.Errorf("error field: got %q want %q", env.ErrorType, shared.ErrTypeMethodNotAllowed)
+	}
+	// RFC 9110 §15.5.6: a 405 MUST carry an Allow header listing the methods the
+	// target resource supports. /api/v1/logs is registered for GET only here.
+	allow := rr.Header().Get("Allow")
+	if allow == "" {
+		t.Fatal("405 must carry an Allow header (RFC 9110), got none")
+	}
+	if !strings.Contains(allow, http.MethodGet) {
+		t.Errorf("Allow header %q should list GET", allow)
+	}
+	if strings.Contains(allow, http.MethodDelete) {
+		t.Errorf("Allow header %q must not list DELETE (no DELETE route registered)", allow)
 	}
 }
 

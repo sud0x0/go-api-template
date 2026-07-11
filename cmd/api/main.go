@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -48,18 +49,45 @@ const readinessCacheTTL = 2 * time.Second
 // recorded on api.errors. http.server.request.count already counts them via the
 // metrics middleware.
 //
-// chi sets the Allow header on a 405 only through its DEFAULT handler; a custom
-// MethodNotAllowed handler is not given the allowed-methods list (it is
-// unexported on the route context). WriteJSONError does not touch the Allow
-// header, so any value already set upstream is preserved. In practice chi sets
-// none for a custom handler, so 405s carry the envelope but no Allow header.
+// chi does NOT hand the allowed-method list to a custom MethodNotAllowed handler
+// (it is unexported on the route context), so RFC 9110 §15.5.6's requirement
+// that a 405 carry an `Allow` header would be dropped. We recompute it by walking
+// the router for the request path across the standard method set and listing the
+// ones that match. WriteJSONError does not touch the Allow header, so the value
+// set here survives into the JSON-envelope 405.
 func registerEnvelopeFallbacks(r chi.Router) {
 	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
 		shared.WriteJSONError(w, http.StatusNotFound, shared.ErrTypeNotFound, "resource not found")
 	})
-	r.MethodNotAllowed(func(w http.ResponseWriter, _ *http.Request) {
+	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+		if allow := allowedMethodsFor(r, req.URL.Path); allow != "" {
+			w.Header().Set("Allow", allow)
+		}
 		shared.WriteJSONError(w, http.StatusMethodNotAllowed, shared.ErrTypeMethodNotAllowed, "method not allowed")
 	})
+}
+
+// probeMethods is the fixed set of HTTP methods allowedMethodsFor walks the
+// router with. It is the RFC 9110 method registry plus PATCH (RFC 5789) — the
+// same bounded set the metrics layer normalises against.
+var probeMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodConnect,
+	http.MethodOptions, http.MethodTrace,
+}
+
+// allowedMethodsFor returns the comma-separated list of methods the router has a
+// route for at path (the RFC 9110 `Allow` header value), or "" if none. It uses
+// chi's read-only Match to probe each method without invoking any handler or
+// middleware, so it reflects exactly the registered routes.
+func allowedMethodsFor(router chi.Router, path string) string {
+	var allowed []string
+	for _, m := range probeMethods {
+		if router.Match(chi.NewRouteContext(), m, path) {
+			allowed = append(allowed, m)
+		}
+	}
+	return strings.Join(allowed, ", ")
 }
 
 func main() {
